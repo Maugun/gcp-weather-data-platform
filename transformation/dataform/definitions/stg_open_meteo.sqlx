@@ -1,0 +1,48 @@
+config {
+  type: "incremental",
+  schema: "weather_staging",
+  name: "stg_open_meteo",
+  tags: ["weather"],
+
+  uniqueKey: ["date", "location_name"],
+
+  assertions: {
+    uniqueKey: ["date", "location_name"],
+    nonNull: ["date", "location_name"]
+  },
+
+  bigquery: {
+    partitionBy: "date",
+    clusterBy: ["location_name"],
+    updatePartitionFilter: `date = DATE('${dataform.projectConfig.vars.target_date}')`
+  }
+}
+
+SELECT
+  date,
+  location_name,
+  latitude,
+  longitude,
+  timezone,
+  temperature_2m_max,
+  temperature_2m_min,
+  temperature_2m_mean,
+  precipitation_sum,
+  rain_sum,
+  wind_speed_10m_max,
+  weather_code,
+  _ingested_at,
+  _source,
+  _run_id
+FROM ${ref("open_meteo")}
+
+${when(
+  incremental(),
+  `WHERE date = DATE('${dataform.projectConfig.vars.target_date}')`,
+  ``
+)}
+
+QUALIFY ROW_NUMBER() OVER (
+  PARTITION BY date, location_name
+  ORDER BY _ingested_at DESC, _run_id DESC
+) = 1
