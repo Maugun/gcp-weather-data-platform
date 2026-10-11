@@ -31,3 +31,8 @@ variable "open_meteo_image_tag" {
   description = "Docker image tag deployed for the Open-Meteo ingestion job."
   type        = string
 }
+
+variable "github_repository" {
+  description = "GitHub repository allowed to authenticate to GCP."
+  type        = string
+}

@@ -4,7 +4,7 @@ A production-oriented data engineering project built on Google Cloud Platform.
 
 The platform ingests weather data from the Open-Meteo API, stores raw data in Google Cloud Storage and BigQuery, transforms it with Dataform, and orchestrates the pipeline with Apache Airflow.
 
-The project is progressively extended with additional ingestion patterns, including AWS S3 batch ingestion and PostgreSQL CDC.
+The project is progressively extended with additional ingestion patterns, infrastructure as code, security practices and CI/CD workflows.
 
 ## Architecture
 
@@ -22,7 +22,13 @@ flowchart LR
     AF --> BQRAW
     AF --> DF
 
-    TF[Terraform] --> GCP[GCP Infrastructure]
+    GH[GitHub Actions] --> WIF[Workload Identity Federation]
+    WIF --> GCP[GCP]
+
+    GH --> AR[Artifact Registry]
+    AR --> CR
+
+    TF[Terraform] --> GCP
 ```
 
 ## Tech Stack
@@ -31,11 +37,15 @@ flowchart LR
 - BigQuery
 - Google Cloud Storage
 - Cloud Run Jobs
+- Artifact Registry
 - Dataform
 - Apache Airflow
 - Terraform
+- GitHub Actions
+- Workload Identity Federation
 - Python
 - Docker
+- Ruff
 
 ## Repository Structure
 
@@ -45,12 +55,26 @@ flowchart LR
 │   └── terraform/
 │       └── environments/
 │           └── dev/
+│               ├── backend.tf
+│               ├── versions.tf
+│               ├── providers.tf
+│               ├── variables.tf
+│               ├── main.tf
+│               ├── service_accounts.tf
+│               ├── iam.tf
+│               ├── cloud_run.tf
+│               ├── dataform.tf
+│               ├── artifact_registry.tf
+│               ├── github_actions.tf
+│               ├── outputs.tf
+│               └── terraform.tfvars.example
 │
 ├── ingestion/
 │   └── open-meteo/
 │       ├── main.py
 │       ├── requirements.txt
-│       └── Procfile
+│       ├── Dockerfile
+│       └── .dockerignore
 │
 ├── orchestration/
 │   └── airflow/
@@ -64,8 +88,10 @@ flowchart LR
 │       └── definitions/
 │
 ├── docs/
+│
 ├── .github/
 │   └── workflows/
+│       └── ci.yml
 │
 ├── pyproject.toml
 ├── .gitignore
@@ -105,11 +131,13 @@ For each scheduled run, Airflow:
 
 ## Data Layers
 
-The project follows a layered data architecture:
+The project follows a layered data architecture.
 
 ### RAW
 
 Raw data is kept close to the source and can contain multiple ingestion versions for the same logical record.
+
+The goal of the RAW layer is to preserve source data and make ingestion replayable.
 
 ### STAGING
 
@@ -123,9 +151,121 @@ For the Open-Meteo pipeline, the logical grain is:
 
 Dataform incremental models use a `uniqueKey` and `MERGE` strategy to keep the latest ingestion for each logical record.
 
+The latest record is determined using ingestion metadata such as:
+
+```text
+_ingested_at
+_run_id
+```
+
 ### CURATED
 
 The curated layer contains data prepared for downstream analytics and business use cases.
+
+It is separated from STAGING so that technical transformations and business-facing models can evolve independently.
+
+## Open-Meteo Ingestion
+
+The Open-Meteo ingestion component is implemented in Python and executed as a Cloud Run Job.
+
+It:
+
+- calls the Open-Meteo API
+- supports a target processing date
+- retries transient HTTP failures
+- generates NDJSON
+- writes raw data to GCS
+- emits structured logs
+- runs using a dedicated Service Account
+
+The ingestion code lives in:
+
+```text
+ingestion/open-meteo/
+```
+
+The application is packaged as a Docker image:
+
+```text
+Python application
+    ↓
+Docker image
+    ↓
+Artifact Registry
+    ↓
+Cloud Run Job
+```
+
+Docker images are versioned using Git commit SHAs to provide traceability between source code and deployed workloads.
+
+Example:
+
+```text
+open-meteo:a84dc312f68e
+```
+
+instead of relying on mutable tags such as:
+
+```text
+latest
+```
+
+## Airflow Orchestration
+
+Apache Airflow is currently run locally using Docker Compose.
+
+The DAG is versioned in Git:
+
+```text
+orchestration/airflow/dags/weather_ingestion_pipeline.py
+```
+
+Airflow coordinates the execution of external services rather than performing data processing itself.
+
+The DAG currently orchestrates:
+
+```text
+Cloud Run ingestion
+    ↓
+GCS object availability
+    ↓
+BigQuery RAW load
+    ↓
+Dataform compilation
+    ↓
+Dataform workflow execution
+```
+
+A freshness-aware GCS sensor ensures that Airflow waits for the object produced by the current pipeline run rather than accepting an older file already present in the bucket.
+
+A future production deployment can use Google Cloud Composer.
+
+## Dataform
+
+Dataform manages SQL transformations between BigQuery data layers.
+
+The Dataform project contains:
+
+```text
+transformation/dataform/
+├── workflow_settings.yaml
+└── definitions/
+```
+
+Transformations are versioned as code and executed programmatically by Airflow using the Dataform API.
+
+The STAGING model uses:
+
+- incremental processing
+- `uniqueKey`
+- BigQuery `MERGE`
+- partitioning
+- clustering
+- assertions
+- source deduplication
+- processing-date variables
+
+This makes transformations deterministic and safe to replay.
 
 ## Infrastructure as Code
 
@@ -136,11 +276,27 @@ Currently managed resources include:
 - BigQuery datasets
 - Service Accounts
 - IAM permissions
-- Remote Terraform state in Google Cloud Storage
+- Cloud Run Jobs
+- Artifact Registry
+- Dataform repository
+- GitHub Workload Identity Federation
+- remote Terraform state configuration
 
 Existing resources originally created manually are progressively imported into Terraform before Terraform becomes their source of truth.
 
-The Terraform state is stored remotely in GCS.
+This allows the project to move from:
+
+```text
+ClickOps
+    ↓
+Understand the resource
+    ↓
+Import into Terraform
+    ↓
+Terraform becomes source of truth
+```
+
+The Terraform state is stored remotely in Google Cloud Storage.
 
 ```text
 Git
@@ -167,19 +323,44 @@ review
 terraform apply
 ```
 
+Environment-specific configuration is separated from reusable Terraform code.
+
+For example:
+
+```text
+variables.tf
+→ declares expected configuration
+
+terraform.tfvars.example
+→ documents example values
+
+terraform.tfvars
+→ local environment configuration
+→ not committed
+```
+
+Deployment-time values such as the application image tag can be supplied through Terraform environment variables:
+
+```text
+TF_VAR_open_meteo_image_tag
+```
+
 ## Security
 
 The project follows least-privilege IAM principles.
 
-Examples include:
+Key practices include:
 
 - dedicated Service Accounts per workload
 - project-level permissions only when required
 - dataset-level BigQuery permissions
 - Service Account impersonation
 - Secret Manager for sensitive values
-- Application Default Credentials
-- no long-lived Service Account JSON keys
+- Application Default Credentials for local development
+- GitHub OIDC authentication
+- Workload Identity Federation
+- no long-lived Service Account JSON keys in GitHub
+- separate runtime and CI/CD identities
 
 For example, the Dataform runtime identity has:
 
@@ -199,6 +380,114 @@ dataform_assertions
 
 The Dataform Service Agent is allowed to impersonate the dedicated `dataform-runner` Service Account.
 
+The Cloud Run ingestion workload uses its own identity:
+
+```text
+open-meteo-ingestion
+```
+
+GitHub Actions uses another dedicated identity:
+
+```text
+github-actions
+```
+
+This prevents CI/CD, ingestion and transformation workloads from sharing the same credentials or permissions.
+
+## GitHub Authentication
+
+GitHub Actions authenticates to Google Cloud using Workload Identity Federation.
+
+```text
+GitHub Actions
+    ↓
+GitHub OIDC token
+    ↓
+GCP Workload Identity Provider
+    ↓
+github-actions Service Account
+    ↓
+temporary GCP credentials
+```
+
+The Workload Identity Provider restricts authentication to the expected GitHub repository.
+
+This avoids storing credentials such as:
+
+```text
+service-account-key.json
+```
+
+inside GitHub Secrets.
+
+Authentication and authorization remain separate:
+
+```text
+Workload Identity Federation
+→ Who is calling?
+
+IAM
+→ What is that identity allowed to do?
+```
+
+## CI/CD
+
+GitHub Actions is used to progressively automate validation and deployment.
+
+The CI workflow runs on pushes and pull requests.
+
+### Python Quality
+
+Python code is checked with Ruff:
+
+```text
+ruff check .
+ruff format --check .
+```
+
+### Terraform Validation
+
+Terraform configuration is checked with:
+
+```text
+terraform fmt -check -recursive
+terraform init
+terraform validate
+terraform plan
+```
+
+The Terraform plan uses the real remote GCS state and reads the current GCP infrastructure through the dedicated GitHub Actions Service Account.
+
+The CI authentication flow is:
+
+```text
+GitHub workflow
+    ↓
+OIDC token
+    ↓
+Workload Identity Federation
+    ↓
+github-actions
+    ↓
+GCP
+```
+
+No long-lived GCP Service Account key is required.
+
+The next CI/CD stage will automate:
+
+```text
+Git commit
+    ↓
+Docker build
+    ↓
+Image tagged with commit SHA
+    ↓
+Artifact Registry push
+    ↓
+Cloud Run deployment
+```
+
 ## Idempotency
 
 The pipeline is designed to be safely replayable.
@@ -207,68 +496,38 @@ A rerun for the same logical date can create another RAW ingestion version, whil
 
 ```text
 RAW
+
 2026-10-10 / Paris / run A
 2026-10-10 / Paris / run B
 
         ↓ Dataform
 
 STAGING
+
 2026-10-10 / Paris / run B
 ```
 
 This allows historical runs and failed pipelines to be replayed without producing duplicated business records downstream.
 
-## Open-Meteo Ingestion
-
-The Open-Meteo ingestion component is implemented in Python and executed as a Cloud Run Job.
-
-It:
-
-- calls the Open-Meteo API
-- supports a target processing date
-- retries transient HTTP failures
-- generates NDJSON
-- writes raw data to GCS
-- emits structured logs
-- runs using a dedicated Service Account
-
-The ingestion code lives in:
+Idempotency is handled at multiple levels:
 
 ```text
-ingestion/open-meteo/
+Ingestion
+→ deterministic target date and object path
+
+RAW
+→ ingestion history can be preserved
+
+STAGING
+→ deduplication + MERGE on logical grain
+
+Orchestration
+→ deterministic Airflow data interval
 ```
-
-## Airflow Orchestration
-
-Apache Airflow is currently run locally using Docker Compose.
-
-The DAG is versioned in Git:
-
-```text
-orchestration/airflow/dags/weather_ingestion_pipeline.py
-```
-
-Airflow is responsible for orchestration only. Data processing remains inside the dedicated GCP services.
-
-A future production deployment can use Google Cloud Composer.
-
-## Dataform
-
-Dataform manages SQL transformations between BigQuery data layers.
-
-The Dataform project contains:
-
-```text
-transformation/dataform/
-├── workflow_settings.yaml
-└── definitions/
-```
-
-Transformations are versioned as code and executed programmatically by Airflow using the Dataform API.
 
 ## Planned Ingestion Patterns
 
-The platform will demonstrate several ingestion strategies depending on the source system.
+The platform demonstrates several ingestion strategies depending on the source system.
 
 ### REST API
 
@@ -279,6 +538,8 @@ Open-Meteo
 → GCS
 → BigQuery
 ```
+
+This demonstrates custom API ingestion when managed connectors are not appropriate.
 
 ### AWS S3
 
@@ -300,6 +561,8 @@ PostgreSQL
 
 This demonstrates Change Data Capture for transactional databases.
 
+The objective is not to force every source through the same ingestion mechanism, but to choose the appropriate service based on the source and ingestion requirements.
+
 ## Development
 
 Python formatting and linting are managed globally with Ruff through:
@@ -316,7 +579,85 @@ The Open-Meteo ingestion dependencies are defined in:
 ingestion/open-meteo/requirements.txt
 ```
 
-The local Airflow environment is currently configured through Docker Compose.
+The local Airflow environment is configured through Docker Compose.
+
+### Python checks
+
+```bash
+ruff check .
+ruff format --check .
+```
+
+### Terraform checks
+
+From:
+
+```text
+infrastructure/terraform/environments/dev/
+```
+
+run:
+
+```bash
+terraform fmt
+terraform validate
+terraform plan
+```
+
+Local deployment-time environment variables can optionally be loaded from a non-committed `.env` file.
+
+Example:
+
+```bash
+TF_VAR_open_meteo_image_tag="your-image-tag"
+```
+
+Then with Git Bash:
+
+```bash
+set -a
+source .env
+set +a
+```
+
+## Design Principles
+
+The project intentionally applies several production-oriented principles:
+
+```text
+Infrastructure
+→ Infrastructure as Code
+
+Identity
+→ one Service Account per responsibility
+
+Permissions
+→ least privilege
+
+Authentication
+→ short-lived credentials
+
+Deployment
+→ immutable Git SHA image tags
+
+Data
+→ RAW / STAGING / CURATED separation
+
+Processing
+→ incremental and idempotent
+
+Orchestration
+→ Airflow coordinates services
+
+Transformations
+→ SQL transformations managed by Dataform
+
+State
+→ remote Terraform state
+
+CI/CD
+→ automated validation before deployment
+```
 
 ## Roadmap
 
@@ -331,11 +672,16 @@ The local Airflow environment is currently configured through Docker Compose.
 - [x] Terraform foundation
 - [x] Remote Terraform state in GCS
 - [x] Import existing GCP resources into Terraform
-- [ ] Cloud Run Job managed by Terraform
-- [ ] Artifact Registry managed by Terraform
-- [ ] Dataform resources managed by Terraform
-- [ ] CI/CD
-- [ ] AWS S3 ingestion
-- [ ] PostgreSQL CDC with Datastream
+- [x] Cloud Run Job managed by Terraform
+- [x] Artifact Registry managed by Terraform
+- [x] Dataform repository managed by Terraform
+- [x] Dockerized Open-Meteo ingestion
+- [x] GitHub Actions CI
+- [x] Workload Identity Federation
+- [ ] Automated Docker build and Artifact Registry push
+- [ ] Automated Cloud Run deployment
+- [ ] Dataform Git integration
+- [ ] AWS S3 ingestion integration
+- [ ] PostgreSQL CDC with Datastream integration
 - [ ] Monitoring and data quality
 - [ ] Production-ready Airflow / Cloud Composer deployment
