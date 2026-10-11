@@ -13,6 +13,10 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: open-meteo-dev-deploy
+  cancel-in-progress: false
+
 env:
   ARTIFACT_REPOSITORY: weather-platform
   IMAGE_NAME: open-meteo
@@ -21,6 +25,10 @@ jobs:
   deploy:
     name: Build and deploy Open-Meteo
     runs-on: ubuntu-24.04
+
+    if: github.ref == 'refs/heads/master'
+
+    environment: dev
 
     steps:
       - name: Checkout repository
@@ -86,7 +94,7 @@ jobs:
           TF_VAR_open_meteo_image_tag: ${{ github.sha }}
         run: terraform apply -input=false tfplan
 
-      - name: Execute Cloud Run Job
+      - name: Smoke test Cloud Run Job
         run: |
           gcloud run jobs execute open-meteo-ingestion \
             --project="${{ vars.GCP_PROJECT_ID }}" \
