@@ -4,7 +4,7 @@ A production-oriented data engineering project built on Google Cloud Platform.
 
 The platform ingests weather data from the Open-Meteo API, stores raw data in Google Cloud Storage and BigQuery, transforms it with Dataform, and orchestrates the pipeline with Apache Airflow.
 
-The project is progressively extended with additional ingestion patterns, infrastructure as code, security practices and CI/CD workflows.
+The project is progressively extended with additional ingestion patterns, Infrastructure as Code, security practices and CI/CD workflows.
 
 ## Architecture
 
@@ -23,7 +23,8 @@ flowchart LR
     AF --> DF
 
     GH[GitHub Actions] --> WIF[Workload Identity Federation]
-    WIF --> GCP[GCP]
+    WIF --> SA[github-actions Service Account]
+    SA --> GCP[GCP]
 
     GH --> AR[Artifact Registry]
     AR --> CR
@@ -91,7 +92,8 @@ flowchart LR
 │
 ├── .github/
 │   └── workflows/
-│       └── ci.yml
+│       ├── ci.yml
+│       └── build-open-meteo.yml
 │
 ├── pyproject.toml
 ├── .gitignore
@@ -280,7 +282,6 @@ Currently managed resources include:
 - Artifact Registry
 - Dataform repository
 - GitHub Workload Identity Federation
-- remote Terraform state configuration
 
 Existing resources originally created manually are progressively imported into Terraform before Terraform becomes their source of truth.
 
@@ -325,8 +326,6 @@ terraform apply
 
 Environment-specific configuration is separated from reusable Terraform code.
 
-For example:
-
 ```text
 variables.tf
 → declares expected configuration
@@ -339,11 +338,58 @@ terraform.tfvars
 → not committed
 ```
 
-Deployment-time values such as the application image tag can be supplied through Terraform environment variables:
+Deployment-time values are not stored as permanent repository configuration.
+
+For example, the Open-Meteo Docker image version is provided through:
 
 ```text
 TF_VAR_open_meteo_image_tag
 ```
+
+When a deployment is applied, Terraform stores the deployed value in its remote state.
+
+The currently deployed image version can therefore be retrieved with:
+
+```bash
+terraform output -raw open_meteo_image_tag
+```
+
+## Application Versioning
+
+Application versions and environment configuration have separate responsibilities.
+
+```text
+GitHub repository variables
+│
+├── GCP_PROJECT_ID
+├── GCP_REGION
+├── GCP_WIF_PROVIDER
+└── GCP_SERVICE_ACCOUNT
+        ↓
+Stable environment configuration
+```
+
+The candidate application version is derived directly from Git:
+
+```text
+Git commit
+    ↓
+github.sha
+    ↓
+Docker image tag
+```
+
+The version currently managed by Terraform is persisted in the remote Terraform state:
+
+```text
+Terraform state
+    ↓
+open_meteo_image_tag
+    ↓
+currently deployed image
+```
+
+This avoids maintaining a mutable application version manually in GitHub repository variables.
 
 ## Security
 
@@ -353,6 +399,7 @@ Key practices include:
 
 - dedicated Service Accounts per workload
 - project-level permissions only when required
+- resource-level IAM when possible
 - dataset-level BigQuery permissions
 - Service Account impersonation
 - Secret Manager for sensitive values
@@ -394,6 +441,8 @@ github-actions
 
 This prevents CI/CD, ingestion and transformation workloads from sharing the same credentials or permissions.
 
+Artifact Registry write access for GitHub Actions is scoped to the dedicated Docker repository rather than granted across the entire project.
+
 ## GitHub Authentication
 
 GitHub Actions authenticates to Google Cloud using Workload Identity Federation.
@@ -432,22 +481,20 @@ IAM
 
 ## CI/CD
 
-GitHub Actions is used to progressively automate validation and deployment.
+GitHub Actions is used to automate project validation and progressively automate application deployment.
 
-The CI workflow runs on pushes and pull requests.
+### Continuous Integration
 
-### Python Quality
+The main CI workflow runs on pushes to the main development branch and on pull requests.
 
-Python code is checked with Ruff:
+Python code is validated with:
 
 ```text
 ruff check .
 ruff format --check .
 ```
 
-### Terraform Validation
-
-Terraform configuration is checked with:
+Terraform is validated with:
 
 ```text
 terraform fmt -check -recursive
@@ -456,37 +503,115 @@ terraform validate
 terraform plan
 ```
 
-The Terraform plan uses the real remote GCS state and reads the current GCP infrastructure through the dedicated GitHub Actions Service Account.
+The CI workflow authenticates to GCP using Workload Identity Federation and reads the real remote Terraform state.
 
-The CI authentication flow is:
+Before running `terraform plan`, CI retrieves the Open-Meteo image tag currently stored in Terraform state:
 
 ```text
-GitHub workflow
+terraform init
     ↓
-OIDC token
+terraform output open_meteo_image_tag
     ↓
-Workload Identity Federation
+TF_VAR_open_meteo_image_tag
     ↓
-github-actions
-    ↓
-GCP
+terraform plan
 ```
 
-No long-lived GCP Service Account key is required.
+This is important because a commit unrelated to Open-Meteo must not be interpreted as a new application release.
 
-The next CI/CD stage will automate:
+For example:
 
 ```text
+README change
+    ↓
+new Git SHA
+    ↓
+CI runs
+    ↓
+current deployed Open-Meteo tag loaded from Terraform state
+    ↓
+no fake Open-Meteo release
+```
+
+### Open-Meteo Build
+
+The Open-Meteo build workflow is scoped to:
+
+```text
+ingestion/open-meteo/**
+```
+
+This means unrelated repository changes do not create unnecessary Docker images.
+
+```text
+README change
+→ no Open-Meteo build
+
+Terraform change
+→ no Open-Meteo build
+
+Airflow change
+→ no Open-Meteo build
+
+Open-Meteo change
+→ Docker build
+```
+
+When triggered, the workflow will use the Git commit SHA as an immutable Docker image tag:
+
+```text
+Open-Meteo source change
+    ↓
 Git commit
+    ↓
+github.sha
     ↓
 Docker build
     ↓
-Image tagged with commit SHA
+open-meteo:<github.sha>
+    ↓
+Artifact Registry
+```
+
+The build workflow can also be started manually using GitHub Actions `workflow_dispatch`.
+
+### Deployment Model
+
+Build and deployment are intentionally treated as separate operations.
+
+```text
+BUILD
+Docker image creation
+        ↓
+Artifact Registry
+
+DEPLOY
+Selected image
+        ↓
+Cloud Run Job
+```
+
+The target deployment flow is:
+
+```text
+Open-Meteo change
+    ↓
+GitHub SHA
+    ↓
+Docker build
     ↓
 Artifact Registry push
     ↓
-Cloud Run deployment
+TF_VAR_open_meteo_image_tag=<github.sha>
+    ↓
+Terraform apply
+    ↓
+Cloud Run Job updated
+    ↓
+Terraform state updated
 ```
+
+No GitHub variable needs to be manually updated with the latest application version.
 
 ## Idempotency
 
@@ -604,7 +729,7 @@ terraform validate
 terraform plan
 ```
 
-Local deployment-time environment variables can optionally be loaded from a non-committed `.env` file.
+For local Terraform operations, deployment-time values can optionally be loaded from a non-committed `.env` file.
 
 Example:
 
@@ -612,12 +737,21 @@ Example:
 TF_VAR_open_meteo_image_tag="your-image-tag"
 ```
 
-Then with Git Bash:
+With Git Bash:
 
 ```bash
 set -a
 source .env
 set +a
+```
+
+Local `.env` and `terraform.tfvars` files are not committed.
+
+Example files can be versioned to document the expected configuration:
+
+```text
+.env.example
+terraform.tfvars.example
 ```
 
 ## Design Principles
@@ -632,13 +766,16 @@ Identity
 → one Service Account per responsibility
 
 Permissions
-→ least privilege
+→ least privilege and narrow resource scopes
 
 Authentication
 → short-lived credentials
 
-Deployment
+Application releases
 → immutable Git SHA image tags
+
+Configuration
+→ stable configuration separated from release state
 
 Data
 → RAW / STAGING / CURATED separation
@@ -652,11 +789,14 @@ Orchestration
 Transformations
 → SQL transformations managed by Dataform
 
-State
-→ remote Terraform state
+Terraform
+→ remote state in GCS
 
-CI/CD
-→ automated validation before deployment
+CI
+→ automated validation and infrastructure planning
+
+CD
+→ build and deployment separated
 ```
 
 ## Roadmap
@@ -678,7 +818,8 @@ CI/CD
 - [x] Dockerized Open-Meteo ingestion
 - [x] GitHub Actions CI
 - [x] Workload Identity Federation
-- [ ] Automated Docker build and Artifact Registry push
+- [x] Terraform plan using remote state from GitHub Actions
+- [ ] Validate automated Docker build and Artifact Registry push
 - [ ] Automated Cloud Run deployment
 - [ ] Dataform Git integration
 - [ ] AWS S3 ingestion integration

@@ -47,7 +47,6 @@ jobs:
     env:
       TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
       TF_VAR_github_repository: ${{ github.repository }}
-      TF_VAR_open_meteo_image_tag: ${{ vars.OPEN_METEO_IMAGE_TAG }}
 
     steps:
       - name: Checkout repository
@@ -73,6 +72,10 @@ jobs:
 
       - name: Terraform validate
         run: terraform validate
+
+      - name: Load currently deployed image tag
+        run: |
+          echo "TF_VAR_open_meteo_image_tag=$(terraform output -raw open_meteo_image_tag)" >> "$GITHUB_ENV"
 
       - name: Terraform plan
         run: terraform plan -input=false

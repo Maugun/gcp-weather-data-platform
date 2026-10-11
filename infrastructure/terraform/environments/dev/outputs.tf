@@ -17,3 +17,8 @@ output "github_actions_service_account_email" {
   description = "Service Account used by GitHub Actions."
   value       = google_service_account.github_actions.email
 }
+
+output "open_meteo_image_tag" {
+  description = "Git commit SHA of the currently deployed Open-Meteo image."
+  value       = var.open_meteo_image_tag
+}
