@@ -1,3 +1,7 @@
+locals {
+  open_meteo_image = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.docker.repository_id}/open-meteo:${var.open_meteo_image_tag}"
+}
+
 resource "google_cloud_run_v2_job" "open_meteo_ingestion" {
   name     = "open-meteo-ingestion"
   location = var.region
@@ -15,9 +19,8 @@ resource "google_cloud_run_v2_job" "open_meteo_ingestion" {
       timeout     = "600s"
 
       containers {
-        name = "open-meteo-ingestion-1"
-
-        image = "europe-west1-docker.pkg.dev/de-gcp-lab/cloud-run-source-deploy/open-meteo-ingestion@sha256:aec14aeb243af54bcf72babb3aab471e9751c937ed0ea6b5b7e23f8b0c1d7e28"
+        name  = "open-meteo-ingestion-1"
+        image = local.open_meteo_image
 
         resources {
           limits = {

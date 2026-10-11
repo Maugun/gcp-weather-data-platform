@@ -139,9 +139,7 @@ with DAG(
         region=DATAFORM_REGION,
         repository_id=DATAFORM_REPOSITORY_ID,
         workflow_invocation={
-            "compilation_result": (
-                "{{ task_instance.xcom_pull('compile_dataform')['name'] }}"
-            ),
+            "compilation_result": ("{{ task_instance.xcom_pull('compile_dataform')['name'] }}"),
             "invocation_config": {
                 "included_tags": ["weather"],
                 "transitive_dependencies_included": True,

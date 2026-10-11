@@ -26,3 +26,8 @@ variable "dataform_region" {
   type        = string
   default     = "europe-west9"
 }
+
+variable "open_meteo_image_tag" {
+  description = "Docker image tag deployed for the Open-Meteo ingestion job."
+  type        = string
+}
