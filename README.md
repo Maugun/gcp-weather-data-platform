@@ -23,13 +23,13 @@ flowchart LR
     AF --> DF
 
     GH[GitHub Actions] --> WIF[Workload Identity Federation]
-    WIF --> SA[github-actions Service Account]
-    SA --> GCP[GCP]
+    WIF --> GHA[github-actions Service Account]
 
-    GH --> AR[Artifact Registry]
+    GHA --> AR[Artifact Registry]
+    GHA --> TF[Terraform]
+    TF --> GCP[GCP Infrastructure]
+
     AR --> CR
-
-    TF[Terraform] --> GCP
 ```
 
 ## Tech Stack
@@ -63,12 +63,14 @@ flowchart LR
 │               ├── main.tf
 │               ├── service_accounts.tf
 │               ├── iam.tf
+│               ├── services.tf
 │               ├── cloud_run.tf
 │               ├── dataform.tf
 │               ├── artifact_registry.tf
 │               ├── github_actions.tf
 │               ├── outputs.tf
-│               └── terraform.tfvars.example
+│               ├── terraform.tfvars.example
+│               └── .terraform.lock.hcl
 │
 ├── ingestion/
 │   └── open-meteo/
@@ -198,12 +200,12 @@ Artifact Registry
 Cloud Run Job
 ```
 
-Docker images are versioned using Git commit SHAs to provide traceability between source code and deployed workloads.
+Docker images are versioned using Git commit SHAs to provide traceability between source code and application artifacts.
 
 Example:
 
 ```text
-open-meteo:a84dc312f68e
+open-meteo:a84dc312f68e...
 ```
 
 instead of relying on mutable tags such as:
@@ -238,7 +240,7 @@ Dataform compilation
 Dataform workflow execution
 ```
 
-A freshness-aware GCS sensor ensures that Airflow waits for the object produced by the current pipeline run rather than accepting an older file already present in the bucket.
+A freshness-aware GCS sensor ensures that Airflow waits for an object updated during the current DAG run rather than accepting a stale object already present in the bucket.
 
 A future production deployment can use Google Cloud Composer.
 
@@ -278,19 +280,20 @@ Currently managed resources include:
 - BigQuery datasets
 - Service Accounts
 - IAM permissions
-- Cloud Run Jobs
+- Cloud Run Job
 - Artifact Registry
 - Dataform repository
 - GitHub Workload Identity Federation
+- required GCP service configuration
 
 Existing resources originally created manually are progressively imported into Terraform before Terraform becomes their source of truth.
 
-This allows the project to move from:
+The migration strategy is:
 
 ```text
 ClickOps
     ↓
-Understand the resource
+Understand and validate the resource
     ↓
 Import into Terraform
     ↓
@@ -340,15 +343,15 @@ terraform.tfvars
 
 Deployment-time values are not stored as permanent repository configuration.
 
-For example, the Open-Meteo Docker image version is provided through:
+The Open-Meteo Docker image version is supplied through:
 
 ```text
 TF_VAR_open_meteo_image_tag
 ```
 
-When a deployment is applied, Terraform stores the deployed value in its remote state.
+After a deployment, Terraform persists the deployed value in its remote state.
 
-The currently deployed image version can therefore be retrieved with:
+The version currently managed by Terraform can therefore be retrieved with:
 
 ```bash
 terraform output -raw open_meteo_image_tag
@@ -356,17 +359,15 @@ terraform output -raw open_meteo_image_tag
 
 ## Application Versioning
 
-Application versions and environment configuration have separate responsibilities.
+Stable environment configuration and application release state are intentionally separated.
+
+GitHub repository variables contain environment configuration:
 
 ```text
-GitHub repository variables
-│
-├── GCP_PROJECT_ID
-├── GCP_REGION
-├── GCP_WIF_PROVIDER
-└── GCP_SERVICE_ACCOUNT
-        ↓
-Stable environment configuration
+GCP_PROJECT_ID
+GCP_REGION
+GCP_WIF_PROVIDER
+GCP_SERVICE_ACCOUNT
 ```
 
 The candidate application version is derived directly from Git:
@@ -409,7 +410,9 @@ Key practices include:
 - no long-lived Service Account JSON keys in GitHub
 - separate runtime and CI/CD identities
 
-For example, the Dataform runtime identity has:
+### Dataform Runtime Identity
+
+The Dataform runtime identity has:
 
 ```text
 Project
@@ -425,7 +428,15 @@ dataform_assertions
 └── BigQuery Data Editor
 ```
 
-The Dataform Service Agent is allowed to impersonate the dedicated `dataform-runner` Service Account.
+The Dataform Service Agent is allowed to impersonate the dedicated:
+
+```text
+dataform-runner
+```
+
+Service Account.
+
+### Open-Meteo Runtime Identity
 
 The Cloud Run ingestion workload uses its own identity:
 
@@ -433,15 +444,42 @@ The Cloud Run ingestion workload uses its own identity:
 open-meteo-ingestion
 ```
 
-GitHub Actions uses another dedicated identity:
+Application runtime permissions are therefore kept separate from CI/CD permissions.
+
+### GitHub Actions Identity
+
+GitHub Actions uses a dedicated identity:
 
 ```text
 github-actions
 ```
 
-This prevents CI/CD, ingestion and transformation workloads from sharing the same credentials or permissions.
+This prevents CI/CD, ingestion and transformation workloads from sharing the same identity.
 
-Artifact Registry write access for GitHub Actions is scoped to the dedicated Docker repository rather than granted across the entire project.
+For application build and deployment, the GitHub Actions identity has narrowly scoped permissions:
+
+```text
+Artifact Registry repository
+└── Artifact Registry Writer
+
+open-meteo-ingestion Cloud Run Job
+└── Cloud Run Developer
+
+open-meteo-ingestion Service Account
+└── Service Account User
+```
+
+This allows GitHub Actions to:
+
+```text
+push Docker images
+    +
+update the dedicated Cloud Run Job
+    +
+attach its runtime Service Account
+```
+
+without granting broad project-wide deployment permissions.
 
 ## GitHub Authentication
 
@@ -481,20 +519,37 @@ IAM
 
 ## CI/CD
 
-GitHub Actions is used to automate project validation and progressively automate application deployment.
+GitHub Actions automates project validation and application delivery.
 
-### Continuous Integration
+The pipeline separates three responsibilities:
+
+```text
+CI
+→ validate code and infrastructure
+
+BUILD
+→ create an immutable application artifact
+
+DEPLOY
+→ release a selected artifact to Cloud Run
+```
+
+## Continuous Integration
 
 The main CI workflow runs on pushes to the main development branch and on pull requests.
 
-Python code is validated with:
+### Python Quality
 
-```text
+Python code is validated with Ruff:
+
+```bash
 ruff check .
 ruff format --check .
 ```
 
-Terraform is validated with:
+### Terraform Validation
+
+Terraform configuration is validated with:
 
 ```text
 terraform fmt -check -recursive
@@ -503,9 +558,9 @@ terraform validate
 terraform plan
 ```
 
-The CI workflow authenticates to GCP using Workload Identity Federation and reads the real remote Terraform state.
+The workflow authenticates to GCP through Workload Identity Federation and reads the real remote Terraform state.
 
-Before running `terraform plan`, CI retrieves the Open-Meteo image tag currently stored in Terraform state:
+Before executing `terraform plan`, CI retrieves the Open-Meteo image version currently managed by Terraform:
 
 ```text
 terraform init
@@ -517,7 +572,7 @@ TF_VAR_open_meteo_image_tag
 terraform plan
 ```
 
-This is important because a commit unrelated to Open-Meteo must not be interpreted as a new application release.
+This prevents unrelated Git commits from being interpreted as new application releases.
 
 For example:
 
@@ -528,20 +583,20 @@ new Git SHA
     ↓
 CI runs
     ↓
-current deployed Open-Meteo tag loaded from Terraform state
+currently deployed Open-Meteo tag loaded from Terraform state
     ↓
-no fake Open-Meteo release
+Terraform plans against the real deployed version
 ```
 
-### Open-Meteo Build
+## Open-Meteo Build
 
-The Open-Meteo build workflow is scoped to:
+The Docker build workflow is scoped to:
 
 ```text
 ingestion/open-meteo/**
 ```
 
-This means unrelated repository changes do not create unnecessary Docker images.
+This prevents unrelated repository changes from creating unnecessary Docker images.
 
 ```text
 README change
@@ -554,10 +609,10 @@ Airflow change
 → no Open-Meteo build
 
 Open-Meteo change
-→ Docker build
+→ Docker build ✅
 ```
 
-When triggered, the workflow will use the Git commit SHA as an immutable Docker image tag:
+When triggered, GitHub Actions uses the Git commit SHA as an immutable Docker image tag:
 
 ```text
 Open-Meteo source change
@@ -573,11 +628,17 @@ open-meteo:<github.sha>
 Artifact Registry
 ```
 
-The build workflow can also be started manually using GitHub Actions `workflow_dispatch`.
+The workflow can also be triggered manually using:
 
-### Deployment Model
+```text
+workflow_dispatch
+```
 
-Build and deployment are intentionally treated as separate operations.
+The automated Docker build and Artifact Registry push have been validated successfully.
+
+## Deployment Model
+
+Build and deployment are intentionally treated as separate concepts.
 
 ```text
 BUILD
@@ -585,8 +646,9 @@ Docker image creation
         ↓
 Artifact Registry
 
+
 DEPLOY
-Selected image
+Selected immutable image
         ↓
 Cloud Run Job
 ```
@@ -604,14 +666,30 @@ Artifact Registry push
     ↓
 TF_VAR_open_meteo_image_tag=<github.sha>
     ↓
+Terraform plan
+    ↓
 Terraform apply
     ↓
 Cloud Run Job updated
     ↓
 Terraform state updated
+    ↓
+Cloud Run Job smoke test
 ```
 
-No GitHub variable needs to be manually updated with the latest application version.
+Terraform plans are saved before being applied:
+
+```text
+terraform plan -out=tfplan
+        ↓
+terraform apply tfplan
+```
+
+This ensures that the deployment applies exactly the plan generated by the workflow.
+
+After deployment, the Cloud Run Job is executed as a smoke test to verify that the new image can start and successfully execute its workload.
+
+No GitHub variable needs to be manually synchronized with the deployed application version.
 
 ## Idempotency
 
@@ -650,9 +728,9 @@ Orchestration
 → deterministic Airflow data interval
 ```
 
-## Planned Ingestion Patterns
+## Ingestion Patterns
 
-The platform demonstrates several ingestion strategies depending on the source system.
+The platform demonstrates different ingestion strategies depending on the source system.
 
 ### REST API
 
@@ -664,7 +742,7 @@ Open-Meteo
 → BigQuery
 ```
 
-This demonstrates custom API ingestion when managed connectors are not appropriate.
+This demonstrates custom API ingestion when a managed connector is not appropriate.
 
 ### AWS S3
 
@@ -686,7 +764,7 @@ PostgreSQL
 
 This demonstrates Change Data Capture for transactional databases.
 
-The objective is not to force every source through the same ingestion mechanism, but to choose the appropriate service based on the source and ingestion requirements.
+The objective is not to force every source through the same ingestion mechanism, but to select an appropriate ingestion strategy for each source.
 
 ## Development
 
@@ -706,14 +784,14 @@ ingestion/open-meteo/requirements.txt
 
 The local Airflow environment is configured through Docker Compose.
 
-### Python checks
+### Python Checks
 
 ```bash
 ruff check .
 ruff format --check .
 ```
 
-### Terraform checks
+### Terraform Checks
 
 From:
 
@@ -729,7 +807,7 @@ terraform validate
 terraform plan
 ```
 
-For local Terraform operations, deployment-time values can optionally be loaded from a non-committed `.env` file.
+For local Terraform operations, deployment-time values can be loaded from a non-committed `.env` file.
 
 Example:
 
@@ -745,9 +823,16 @@ source .env
 set +a
 ```
 
-Local `.env` and `terraform.tfvars` files are not committed.
+Local files such as:
 
-Example files can be versioned to document the expected configuration:
+```text
+.env
+terraform.tfvars
+```
+
+are not committed.
+
+Example configuration files can be versioned safely:
 
 ```text
 .env.example
@@ -756,7 +841,7 @@ terraform.tfvars.example
 
 ## Design Principles
 
-The project intentionally applies several production-oriented principles:
+The project intentionally applies production-oriented principles:
 
 ```text
 Infrastructure
@@ -771,7 +856,7 @@ Permissions
 Authentication
 → short-lived credentials
 
-Application releases
+Application artifacts
 → immutable Git SHA image tags
 
 Configuration
@@ -784,7 +869,7 @@ Processing
 → incremental and idempotent
 
 Orchestration
-→ Airflow coordinates services
+→ Airflow coordinates external services
 
 Transformations
 → SQL transformations managed by Dataform
@@ -795,8 +880,11 @@ Terraform
 CI
 → automated validation and infrastructure planning
 
+Build
+→ only when application sources change
+
 CD
-→ build and deployment separated
+→ build and deployment treated separately
 ```
 
 ## Roadmap
@@ -819,10 +907,17 @@ CD
 - [x] GitHub Actions CI
 - [x] Workload Identity Federation
 - [x] Terraform plan using remote state from GitHub Actions
-- [ ] Validate automated Docker build and Artifact Registry push
+- [x] Automated Docker build
+- [x] Artifact Registry push from GitHub Actions
+- [x] Scoped CI/CD deployment permissions
 - [ ] Automated Cloud Run deployment
+- [ ] Post-deployment Cloud Run smoke test
 - [ ] Dataform Git integration
 - [ ] AWS S3 ingestion integration
 - [ ] PostgreSQL CDC with Datastream integration
 - [ ] Monitoring and data quality
 - [ ] Production-ready Airflow / Cloud Composer deployment
+
+```
+
+```

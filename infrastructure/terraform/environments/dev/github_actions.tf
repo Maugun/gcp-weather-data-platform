@@ -69,3 +69,19 @@ resource "google_artifact_registry_repository_iam_member" "github_actions_writer
   role   = "roles/artifactregistry.writer"
   member = "serviceAccount:${google_service_account.github_actions.email}"
 }
+
+resource "google_cloud_run_v2_job_iam_member" "github_actions_developer" {
+  project  = google_cloud_run_v2_job.open_meteo_ingestion.project
+  location = google_cloud_run_v2_job.open_meteo_ingestion.location
+  name     = google_cloud_run_v2_job.open_meteo_ingestion.name
+
+  role   = "roles/run.developer"
+  member = "serviceAccount:${google_service_account.github_actions.email}"
+}
+
+resource "google_service_account_iam_member" "github_actions_open_meteo_user" {
+  service_account_id = google_service_account.workloads["open-meteo-ingestion"].name
+
+  role   = "roles/iam.serviceAccountUser"
+  member = "serviceAccount:${google_service_account.github_actions.email}"
+}

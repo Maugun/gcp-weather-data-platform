@@ -1,4 +1,4 @@
-name: Build Open-Meteo
+name: Build and Deploy Open-Meteo
 
 on:
   push:
@@ -18,8 +18,8 @@ env:
   IMAGE_NAME: open-meteo
 
 jobs:
-  build:
-    name: Build and push Docker image
+  deploy:
+    name: Build and deploy Open-Meteo
     runs-on: ubuntu-24.04
 
     steps:
@@ -57,3 +57,38 @@ jobs:
           IMAGE_URI="${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${ARTIFACT_REPOSITORY}/${IMAGE_NAME}:${GITHUB_SHA}"
 
           docker push "${IMAGE_URI}"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.16.5"
+
+      - name: Terraform init
+        working-directory: infrastructure/terraform/environments/dev
+        run: terraform init
+
+      - name: Terraform plan
+        working-directory: infrastructure/terraform/environments/dev
+        env:
+          TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+          TF_VAR_github_repository: ${{ github.repository }}
+          TF_VAR_open_meteo_image_tag: ${{ github.sha }}
+        run: |
+          terraform plan \
+            -input=false \
+            -out=tfplan
+
+      - name: Terraform apply
+        working-directory: infrastructure/terraform/environments/dev
+        env:
+          TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+          TF_VAR_github_repository: ${{ github.repository }}
+          TF_VAR_open_meteo_image_tag: ${{ github.sha }}
+        run: terraform apply -input=false tfplan
+
+      - name: Execute Cloud Run Job
+        run: |
+          gcloud run jobs execute open-meteo-ingestion \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --region="${{ vars.GCP_REGION }}" \
+            --wait
