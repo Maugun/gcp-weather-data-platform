@@ -81,3 +81,19 @@ resource "google_secret_manager_secret_iam_member" "github_actions_weather_db_vi
   role   = "roles/secretmanager.viewer"
   member = "serviceAccount:${google_service_account.github_actions.email}"
 }
+
+resource "google_cloud_run_v2_service_iam_member" "github_actions_weather_api_developer" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.weather_api.name
+
+  role   = "roles/run.developer"
+  member = "serviceAccount:${google_service_account.github_actions.email}"
+}
+
+resource "google_service_account_iam_member" "github_actions_weather_api_user" {
+  service_account_id = google_service_account.workloads["weather-api"].name
+
+  role   = "roles/iam.serviceAccountUser"
+  member = "serviceAccount:${google_service_account.github_actions.email}"
+}
