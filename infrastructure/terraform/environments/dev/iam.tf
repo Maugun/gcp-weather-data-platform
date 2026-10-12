@@ -73,3 +73,11 @@ resource "google_cloud_run_v2_service_iam_member" "weather_api_gateway_invoker" 
   role   = "roles/run.invoker"
   member = "serviceAccount:${google_service_account.workloads["weather-api-gateway"].email}"
 }
+
+resource "google_secret_manager_secret_iam_member" "github_actions_weather_db_viewer" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.weather_db_password.secret_id
+
+  role   = "roles/secretmanager.viewer"
+  member = "serviceAccount:${google_service_account.github_actions.email}"
+}

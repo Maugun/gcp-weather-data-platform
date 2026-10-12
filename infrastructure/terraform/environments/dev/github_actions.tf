@@ -8,6 +8,7 @@ locals {
     "roles/artifactregistry.reader",
     "roles/dataform.viewer",
     "roles/bigquery.metadataViewer",
+    "roles/apigateway.viewer",
   ])
 }
 
