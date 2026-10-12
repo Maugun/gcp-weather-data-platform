@@ -86,3 +86,20 @@ jobs:
       - name: Terraform apply
         working-directory: ${{ env.TF_DIR }}
         run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Smoke test Weather API
+        env:
+          WEATHER_API_KEY: ${{ secrets.WEATHER_API_KEY }}
+        run: |
+          GATEWAY_HOST=$(gcloud api-gateway gateways describe weather-api-gateway \
+            --location="${REGION}" \
+            --project="${PROJECT_ID}" \
+            --format="value(defaultHostname)")
+
+          curl \
+            --fail-with-body \
+            --silent \
+            --show-error \
+            --get \
+            --data-urlencode "key=${WEATHER_API_KEY}" \
+            "https://${GATEWAY_HOST}/health"
