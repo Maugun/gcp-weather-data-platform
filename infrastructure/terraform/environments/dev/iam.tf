@@ -49,3 +49,27 @@ resource "google_service_account_iam_member" "dataform_service_agent_token_creat
   role   = "roles/iam.serviceAccountTokenCreator"
   member = local.dataform_service_agent
 }
+
+resource "google_secret_manager_secret_iam_member" "weather_api_secret_accessor" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.weather_db_password.secret_id
+
+  role   = "roles/secretmanager.secretAccessor"
+  member = "serviceAccount:${google_service_account.workloads["weather-api"].email}"
+}
+
+resource "google_project_iam_member" "weather_api_cloud_sql_client" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+
+  member = "serviceAccount:${google_service_account.workloads["weather-api"].email}"
+}
+
+resource "google_cloud_run_v2_service_iam_member" "weather_api_gateway_invoker" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.weather_api.name
+
+  role   = "roles/run.invoker"
+  member = "serviceAccount:${google_service_account.workloads["weather-api-gateway"].email}"
+}

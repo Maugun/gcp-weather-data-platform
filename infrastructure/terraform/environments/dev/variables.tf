@@ -36,3 +36,8 @@ variable "github_repository" {
   description = "GitHub repository allowed to authenticate to GCP."
   type        = string
 }
+
+variable "weather_api_image_tag" {
+  description = "Docker image tag deployed for the Weather API."
+  type        = string
+}

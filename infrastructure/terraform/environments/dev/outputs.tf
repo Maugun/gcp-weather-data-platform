@@ -22,3 +22,8 @@ output "open_meteo_image_tag" {
   description = "Git commit SHA of the currently deployed Open-Meteo image."
   value       = var.open_meteo_image_tag
 }
+
+output "weather_api_image_tag" {
+  description = "Docker image tag currently deployed for the Weather API."
+  value       = var.weather_api_image_tag
+}

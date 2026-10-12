@@ -1,0 +1,4 @@
+fastapi
+uvicorn[standard]
+SQLAlchemy
+cloud-sql-python-connector[pg8000]

@@ -1,0 +1,80 @@
+swagger: "2.0"
+
+info:
+  title: Weather API
+  description: Weather stations API exposed through Google Cloud API Gateway.
+  version: "1.0.0"
+
+schemes:
+  - https
+
+produces:
+  - application/json
+
+securityDefinitions:
+  api_key:
+    type: apiKey
+    name: key
+    in: query
+
+security:
+  - api_key: []
+
+x-google-backend:
+  address: https://weather-api-oaxtfv3kka-ew.a.run.app
+  path_translation: APPEND_PATH_TO_ADDRESS
+  deadline: 15.0
+
+paths:
+  /health:
+    get:
+      operationId: health
+      summary: Check API health
+      responses:
+        "200":
+          description: API is healthy
+
+  /stations:
+    get:
+      operationId: getStations
+      summary: List active weather stations
+      responses:
+        "200":
+          description: List of weather stations
+
+  /stations/{station_id}:
+    get:
+      operationId: getStation
+      summary: Get a weather station
+      parameters:
+        - name: station_id
+          in: path
+          required: true
+          type: string
+      responses:
+        "200":
+          description: Weather station
+        "404":
+          description: Station not found
+
+  /stations/{station_id}/observations:
+    get:
+      operationId: getStationObservations
+      summary: Get weather observations for a station
+      parameters:
+        - name: station_id
+          in: path
+          required: true
+          type: string
+
+        - name: limit
+          in: query
+          required: false
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+
+      responses:
+        "200":
+          description: Weather observations
