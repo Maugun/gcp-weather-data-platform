@@ -30,6 +30,8 @@ jobs:
       ARTIFACT_REPOSITORY: weather-platform
       SERVICE_NAME: weather-api
       TF_DIR: infrastructure/terraform/environments/dev
+      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+      TF_VAR_github_repository: ${{ github.repository }}
 
     steps:
       - name: Checkout
