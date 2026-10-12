@@ -2,34 +2,56 @@
 
 A production-oriented data engineering project built on Google Cloud Platform.
 
-The platform ingests weather data from the Open-Meteo API, stores raw data in Google Cloud Storage and BigQuery, transforms it with Dataform, and orchestrates the pipeline with Apache Airflow.
+The platform currently combines two complementary workloads:
 
-The project is progressively extended with additional ingestion patterns, Infrastructure as Code, security practices and CI/CD workflows.
+- a batch weather data pipeline based on Open-Meteo, Cloud Run Jobs, GCS, BigQuery, Dataform and Airflow
+- an operational Weather API exposed through API Gateway, backed by a private Cloud Run service and Cloud SQL for PostgreSQL
+
+The project is progressively extended with additional ingestion patterns, Infrastructure as Code, security controls and CI/CD workflows.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    API[Open-Meteo API] --> CR[Cloud Run Job]
-    CR --> GCS[GCS RAW]
+    %% Data pipeline
+    OM[Open-Meteo API] --> CRJ[Cloud Run Job]
+    CRJ --> GCS[GCS RAW]
     GCS --> BQRAW[BigQuery RAW]
-
     BQRAW --> DF[Dataform]
     DF --> STG[BigQuery STAGING]
     STG --> CUR[BigQuery CURATED]
 
-    AF[Apache Airflow] --> CR
+    AF[Apache Airflow] --> CRJ
     AF --> BQRAW
     AF --> DF
 
+    %% Operational API
+    CLIENT[API Client] --> GW[API Gateway]
+    GW --> CRS[Cloud Run Service - weather-api]
+    CRS --> PG[Cloud SQL PostgreSQL]
+
+    %% CI/CD and IaC
     GH[GitHub Actions] --> WIF[Workload Identity Federation]
     WIF --> GHA[github-actions Service Account]
-
     GHA --> AR[Artifact Registry]
     GHA --> TF[Terraform]
     TF --> GCP[GCP Infrastructure]
 
-    AR --> CR
+    AR --> CRJ
+    AR --> CRS
+```
+
+The current architecture deliberately separates:
+
+```text
+Analytical data pipeline
+Open-Meteo → GCS → BigQuery → Dataform
+
+Operational API path
+Client → API Gateway → Cloud Run → PostgreSQL
+
+Delivery platform
+GitHub Actions → WIF → Artifact Registry → Terraform → GCP
 ```
 
 ## Tech Stack
@@ -38,6 +60,10 @@ flowchart LR
 - BigQuery
 - Google Cloud Storage
 - Cloud Run Jobs
+- Cloud Run Services
+- Cloud SQL for PostgreSQL
+- API Gateway
+- Secret Manager
 - Artifact Registry
 - Dataform
 - Apache Airflow
@@ -45,6 +71,9 @@ flowchart LR
 - GitHub Actions
 - Workload Identity Federation
 - Python
+- FastAPI
+- SQLAlchemy
+- Cloud SQL Python Connector
 - Docker
 - Ruff
 
@@ -68,6 +97,8 @@ flowchart LR
 │               ├── dataform.tf
 │               ├── artifact_registry.tf
 │               ├── github_actions.tf
+│               ├── secret_manager.tf
+│               ├── api_gateway.tf
 │               ├── outputs.tf
 │               ├── terraform.tfvars.example
 │               └── .terraform.lock.hcl
@@ -78,6 +109,22 @@ flowchart LR
 │       ├── requirements.txt
 │       ├── Dockerfile
 │       └── .dockerignore
+│
+├── api/
+│   └── weather-api/
+│       ├── main.py
+│       ├── requirements.txt
+│       ├── Dockerfile
+│       ├── .dockerignore
+│       └── openapi.yaml
+│
+├── database/
+│   └── postgres/
+│       ├── schema.sql
+│       ├── seed.sql
+│       ├── roles.sql
+│       ├── datastream-publication.sql
+│       └── datastream-slot.sql
 │
 ├── orchestration/
 │   └── airflow/
@@ -95,14 +142,15 @@ flowchart LR
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml
-│       └── build-open-meteo.yml
+│       ├── build-open-meteo.yml
+│       └── deploy-weather-api.yml
 │
 ├── pyproject.toml
 ├── .gitignore
 └── README.md
 ```
 
-## Current Pipeline
+## Current Data Pipeline
 
 The Open-Meteo ingestion pipeline follows:
 
@@ -132,6 +180,108 @@ For each scheduled run, Airflow:
 4. Compiles Dataform with the target processing date.
 5. Executes the Dataform workflow.
 6. Produces a deduplicated incremental staging dataset.
+
+## Operational Weather API
+
+The platform also exposes weather station data through a dedicated API path:
+
+```text
+Client
+    ↓ API key
+API Gateway
+    ↓ authenticated backend call
+Cloud Run Service - weather-api
+    ↓ Cloud SQL Python Connector
+Cloud SQL PostgreSQL
+```
+
+The Cloud Run backend remains private. API Gateway is the intended public entry point and invokes Cloud Run using the dedicated:
+
+```text
+weather-api-gateway
+```
+
+Service Account.
+
+The application runtime uses a separate:
+
+```text
+weather-api
+```
+
+Service Account.
+
+The FastAPI service currently exposes:
+
+```text
+GET /health
+GET /stations
+GET /stations/{station_id}
+GET /stations/{station_id}/observations
+```
+
+The health endpoint checks both application availability and database connectivity.
+
+API Gateway is configured from:
+
+```text
+api/weather-api/openapi.yaml
+```
+
+The API definition is versioned in Git and managed through Terraform.
+
+## PostgreSQL Operational Source
+
+Cloud SQL for PostgreSQL represents an operational weather station system.
+
+The current model contains:
+
+```text
+weather_stations
+weather_observations
+```
+
+`weather_stations` stores station metadata such as:
+
+- station identifier
+- station name
+- city
+- country
+- region
+- latitude and longitude
+- operator contact
+- active status
+
+`weather_observations` stores time-series observations such as:
+
+- station identifier
+- observation timestamp
+- temperature
+- humidity
+- precipitation
+- wind speed
+
+The model intentionally remains normalized because PostgreSQL represents the OLTP side of the platform.
+
+BigQuery will later expose analytics-oriented models in the CURATED layer.
+
+PostgreSQL setup is versioned in:
+
+```text
+database/postgres/
+```
+
+This includes:
+
+```text
+schema.sql
+seed.sql
+roles.sql
+datastream-publication.sql
+datastream-slot.sql
+```
+
+The Datastream publication and logical replication slot are already prepared for the upcoming CDC integration.
 
 ## Data Layers
 
@@ -167,6 +317,8 @@ _run_id
 The curated layer contains data prepared for downstream analytics and business use cases.
 
 It is separated from STAGING so that technical transformations and business-facing models can evolve independently.
+
+The next iterations will extend CURATED into a multi-source weather model combining external API, PostgreSQL CDC and historical S3 data.
 
 ## Open-Meteo Ingestion
 
@@ -278,10 +430,15 @@ Terraform manages the GCP infrastructure.
 Currently managed resources include:
 
 - BigQuery datasets
-- Service Accounts
+- workload Service Accounts
 - IAM permissions
-- Cloud Run Job
+- Open-Meteo Cloud Run Job
+- Weather API Cloud Run Service
 - Artifact Registry
+- Secret Manager secret metadata
+- API Gateway API
+- API Gateway API Config
+- API Gateway Gateway
 - Dataform repository
 - GitHub Workload Identity Federation
 - required GCP service configuration
@@ -296,6 +453,8 @@ ClickOps
 Understand and validate the resource
     ↓
 Import into Terraform
+    ↓
+Reconcile drift
     ↓
 Terraform becomes source of truth
 ```
@@ -341,27 +500,26 @@ terraform.tfvars
 → not committed
 ```
 
-Deployment-time values are not stored as permanent repository configuration.
+Sensitive secret values are intentionally not managed as Terraform secret versions.
 
-The Open-Meteo Docker image version is supplied through:
+For example:
 
 ```text
-TF_VAR_open_meteo_image_tag
-```
+Terraform
+→ manages weather-db-password secret metadata and IAM
 
-After a deployment, Terraform persists the deployed value in its remote state.
+Secret Manager
+→ stores the actual database password
 
-The version currently managed by Terraform can therefore be retrieved with:
-
-```bash
-terraform output -raw open_meteo_image_tag
+Terraform state
+→ does not contain the database password value
 ```
 
 ## Application Versioning
 
 Stable environment configuration and application release state are intentionally separated.
 
-GitHub repository variables contain environment configuration:
+GitHub repository variables contain stable environment configuration:
 
 ```text
 GCP_PROJECT_ID
@@ -370,7 +528,7 @@ GCP_WIF_PROVIDER
 GCP_SERVICE_ACCOUNT
 ```
 
-The candidate application version is derived directly from Git:
+Application releases are derived directly from Git:
 
 ```text
 Git commit
@@ -380,17 +538,29 @@ github.sha
 Docker image tag
 ```
 
-The version currently managed by Terraform is persisted in the remote Terraform state:
+Both deployable applications use immutable Git SHA tags:
+
+```text
+open-meteo:<github.sha>
+weather-api:<github.sha>
+```
+
+Terraform persists the currently deployed application versions in remote state:
 
 ```text
 Terraform state
-    ↓
-open_meteo_image_tag
-    ↓
-currently deployed image
+├── open_meteo_image_tag
+└── weather_api_image_tag
 ```
 
-This avoids maintaining a mutable application version manually in GitHub repository variables.
+The currently deployed versions can be retrieved with:
+
+```bash
+terraform output -raw open_meteo_image_tag
+terraform output -raw weather_api_image_tag
+```
+
+This avoids keeping application release SHAs as manually maintained GitHub repository variables.
 
 ## Security
 
@@ -408,7 +578,9 @@ Key practices include:
 - GitHub OIDC authentication
 - Workload Identity Federation
 - no long-lived Service Account JSON keys in GitHub
-- separate runtime and CI/CD identities
+- separate runtime, gateway and CI/CD identities
+- private Cloud Run backend behind API Gateway
+- API key validation at the gateway layer
 
 ### Dataform Runtime Identity
 
@@ -446,6 +618,49 @@ open-meteo-ingestion
 
 Application runtime permissions are therefore kept separate from CI/CD permissions.
 
+### Weather API Runtime Identity
+
+The Weather API uses:
+
+```text
+weather-api
+```
+
+Its responsibilities include:
+
+```text
+Cloud SQL Client
+→ connect to weather-postgres
+
+Secret Manager Secret Accessor
+→ weather-db-password only
+```
+
+The database login used by the application is:
+
+```text
+weather_app
+```
+
+and is restricted to the SQL permissions required by the API.
+
+### API Gateway Identity
+
+API Gateway uses:
+
+```text
+weather-api-gateway
+```
+
+with:
+
+```text
+roles/run.invoker
+→ weather-api Cloud Run Service only
+```
+
+This separates public API routing from application runtime permissions.
+
 ### GitHub Actions Identity
 
 GitHub Actions uses a dedicated identity:
@@ -454,9 +669,11 @@ GitHub Actions uses a dedicated identity:
 github-actions
 ```
 
-This prevents CI/CD, ingestion and transformation workloads from sharing the same identity.
+This prevents CI/CD, ingestion, transformation, API gateway and application workloads from sharing the same identity.
 
-For application build and deployment, the GitHub Actions identity has narrowly scoped permissions:
+For application build and deployment, the GitHub Actions identity has narrowly scoped permissions.
+
+Examples include:
 
 ```text
 Artifact Registry repository
@@ -467,19 +684,21 @@ open-meteo-ingestion Cloud Run Job
 
 open-meteo-ingestion Service Account
 └── Service Account User
+
+weather-api Cloud Run Service
+└── Cloud Run Developer
+
+weather-api Service Account
+└── Service Account User
+
+API Gateway
+└── Viewer for Terraform plan
+
+weather-db-password
+└── Secret Manager Viewer for Terraform metadata refresh
 ```
 
-This allows GitHub Actions to:
-
-```text
-push Docker images
-    +
-update the dedicated Cloud Run Job
-    +
-attach its runtime Service Account
-```
-
-without granting broad project-wide deployment permissions.
+GitHub Actions does not receive Secret Manager Secret Accessor permission for the database password.
 
 ## GitHub Authentication
 
@@ -517,6 +736,44 @@ IAM
 → What is that identity allowed to do?
 ```
 
+## API Gateway Security Model
+
+The Weather API follows a layered security model:
+
+```text
+Client
+    ↓ API key
+API Gateway
+    ↓ backend identity
+weather-api-gateway Service Account
+    ↓ roles/run.invoker
+Private Cloud Run weather-api
+    ↓ runtime identity
+weather-api Service Account
+    ↓ Cloud SQL Client
+Cloud SQL PostgreSQL
+    ↓ database credentials
+weather_app
+```
+
+Each layer has a distinct responsibility:
+
+```text
+API key
+→ identifies and controls API consumers
+
+API Gateway backend identity
+→ authenticates gateway-to-backend calls
+
+Cloud Run Service Account
+→ authorizes GCP resource access
+
+PostgreSQL role
+→ authorizes SQL operations
+```
+
+The API key is stored as a GitHub Environment secret only for end-to-end deployment smoke testing.
+
 ## CI/CD
 
 GitHub Actions automates project validation and application delivery.
@@ -528,10 +785,10 @@ CI
 → validate code and infrastructure
 
 BUILD
-→ create an immutable application artifact
+→ create immutable application artifacts
 
 DEPLOY
-→ release a selected artifact to Cloud Run
+→ release selected artifacts to Cloud Run
 ```
 
 ## Continuous Integration
@@ -560,14 +817,16 @@ terraform plan
 
 The workflow authenticates to GCP through Workload Identity Federation and reads the real remote Terraform state.
 
-Before executing `terraform plan`, CI retrieves the Open-Meteo image version currently managed by Terraform:
+Before executing `terraform plan`, CI retrieves both application versions currently managed by Terraform:
 
 ```text
 terraform init
     ↓
 terraform output open_meteo_image_tag
+terraform output weather_api_image_tag
     ↓
 TF_VAR_open_meteo_image_tag
+TF_VAR_weather_api_image_tag
     ↓
 terraform plan
 ```
@@ -583,14 +842,14 @@ new Git SHA
     ↓
 CI runs
     ↓
-currently deployed Open-Meteo tag loaded from Terraform state
+currently deployed application tags loaded from Terraform state
     ↓
-Terraform plans against the real deployed version
+Terraform plans against the real deployed versions
 ```
 
 CI never performs `terraform apply`.
 
-## Open-Meteo Build
+## Open-Meteo Delivery
 
 The Open-Meteo workflow is scoped to:
 
@@ -602,16 +861,16 @@ This prevents unrelated repository changes from creating unnecessary Docker imag
 
 ```text
 README change
-→ no Open-Meteo build
+→ no Open-Meteo release
 
 Terraform change
-→ no Open-Meteo build
+→ no Open-Meteo release
 
 Airflow change
-→ no Open-Meteo build
+→ no Open-Meteo release
 
 Open-Meteo change
-→ Docker build ✅
+→ build and deployment ✅
 ```
 
 When triggered, GitHub Actions uses the Git commit SHA as an immutable Docker image tag:
@@ -636,31 +895,10 @@ The workflow can also be triggered manually using:
 workflow_dispatch
 ```
 
-The automated Docker build and Artifact Registry push have been validated successfully.
-
-## Deployment Model
-
-Build and deployment are intentionally treated as separate concepts.
-
-```text
-BUILD
-Docker image creation
-        ↓
-Artifact Registry
-
-
-DEPLOY
-Selected immutable image
-        ↓
-Cloud Run Job
-```
-
-The deployment flow is designed as:
+The deployment flow is:
 
 ```text
 Open-Meteo change
-    ↓
-GitHub SHA
     ↓
 Docker build
     ↓
@@ -668,52 +906,94 @@ Artifact Registry push
     ↓
 TF_VAR_open_meteo_image_tag=<github.sha>
     ↓
-Terraform plan
+Terraform plan -out=tfplan
     ↓
-Terraform apply
+Terraform apply tfplan
     ↓
 Cloud Run Job updated
-    ↓
-Terraform state updated
     ↓
 Cloud Run Job smoke test
 ```
 
-Terraform plans are saved before being applied:
+## Weather API Delivery
+
+The Weather API has its own delivery workflow:
 
 ```text
-terraform plan -out=tfplan
-        ↓
-terraform apply tfplan
+.github/workflows/deploy-weather-api.yml
 ```
 
-This ensures that deployment applies exactly the plan generated by the workflow.
+Automatic deployment is scoped to:
 
-After deployment, the Cloud Run Job is executed as a smoke test to verify that the new image can start and successfully execute its workload.
+```text
+api/weather-api/**
+```
 
-No GitHub variable needs to be manually synchronized with the deployed application version.
+and the workflow can also be triggered manually with:
+
+```text
+workflow_dispatch
+```
+
+The release flow is:
+
+```text
+Weather API source change
+    ↓
+Git commit SHA
+    ↓
+Docker build
+    ↓
+weather-api:<github.sha>
+    ↓
+Artifact Registry
+    ↓
+TF_VAR_weather_api_image_tag=<github.sha>
+    ↓
+Terraform plan -out=tfplan
+    ↓
+Terraform apply tfplan
+    ↓
+Cloud Run weather-api updated
+    ↓
+API Gateway smoke test
+    ↓
+Cloud SQL connectivity verified
+```
+
+During a Weather API release, the Open-Meteo release tag is loaded from the Terraform state so that the deployment cannot accidentally modify the Open-Meteo application version.
+
+The smoke test calls:
+
+```text
+API Gateway /health
+```
+
+using the API key stored in the GitHub `dev` Environment.
+
+This verifies the full path:
+
+```text
+GitHub Actions
+→ API Gateway
+→ private Cloud Run
+→ Cloud SQL Connector
+→ PostgreSQL
+```
 
 ## Deployment Protection
 
-Application deployment is associated with the GitHub Environment:
+Application deployments are associated with the GitHub Environment:
 
 ```text
 dev
 ```
 
-This explicitly represents the target environment in GitHub Actions and provides a place for future environment-level protection rules.
+This explicitly represents the target environment in GitHub Actions and provides a place for environment-level secrets and future protection rules.
 
-Only the `master` branch is allowed to execute the deployment job.
+Only the `master` branch is allowed to execute deployment jobs.
 
-The automatic trigger already restricts application deployments to:
-
-```yaml
-push:
-  branches:
-    - master
-```
-
-The deployment job also contains an additional guard:
+Automatic triggers restrict deployments to `master`, and deployment jobs also contain:
 
 ```yaml
 if: github.ref == 'refs/heads/master'
@@ -721,19 +1001,11 @@ if: github.ref == 'refs/heads/master'
 
 This protects manual `workflow_dispatch` executions as well.
 
-As a result:
-
-```text
-master
-→ deployment allowed
-
-feature/*
-→ deployment skipped
-```
-
 ### Deployment Concurrency
 
-Deployments are serialized using a GitHub Actions concurrency group:
+Application deployments use dedicated concurrency groups.
+
+For example:
 
 ```yaml
 concurrency:
@@ -741,29 +1013,23 @@ concurrency:
   cancel-in-progress: false
 ```
 
-This prevents two deployments from attempting to modify the same Cloud Run Job and Terraform state concurrently.
+and:
 
-```text
-Deployment A
-        ↓
-Terraform apply
-        ↓
-complete
-
-Deployment B
-        ↓
-waits
-        ↓
-starts after A
+```yaml
+concurrency:
+  group: weather-api-dev-deploy
+  cancel-in-progress: false
 ```
+
+This prevents overlapping deployments from attempting to modify the same application or Terraform state concurrently.
 
 Running deployments are not cancelled when a newer commit arrives.
 
-This complements Terraform state locking and avoids interrupting an infrastructure operation while it is in progress.
+This complements Terraform state locking and avoids interrupting infrastructure operations in progress.
 
 ## CI/CD Flow
 
-The complete separation is:
+The overall separation is:
 
 ```text
 Pull Request / Push
@@ -777,47 +1043,49 @@ Terraform plan
 No infrastructure mutation
 ```
 
-For application changes merged to `master`:
+For Open-Meteo changes merged to `master`:
 
 ```text
 ingestion/open-meteo/** changed
         ↓
-Build and Deploy Open-Meteo
-        ↓
-GitHub Environment: dev
+Open-Meteo workflow
         ↓
 Docker build
         ↓
-Artifact Registry push
+Artifact Registry
         ↓
-Terraform plan
-        ↓
-Terraform apply
+Terraform plan/apply
         ↓
 Cloud Run Job
         ↓
 Smoke test
 ```
 
-Unrelated repository changes do not produce application releases:
+For Weather API changes merged to `master`:
 
 ```text
-README change
-→ CI only
-
-Terraform change
-→ CI only
-
-Airflow change
-→ CI only
-
-Open-Meteo change on master
-→ CI + application build/deployment
+api/weather-api/** changed
+        ↓
+Weather API workflow
+        ↓
+Docker build
+        ↓
+Artifact Registry
+        ↓
+Terraform plan/apply
+        ↓
+Cloud Run Service
+        ↓
+API Gateway
+        ↓
+End-to-end smoke test
 ```
+
+Unrelated repository changes do not produce application releases.
 
 ## Idempotency
 
-The pipeline is designed to be safely replayable.
+The data pipeline is designed to be safely replayable.
 
 A rerun for the same logical date can create another RAW ingestion version, while the STAGING layer keeps only the latest logical record.
 
@@ -858,6 +1126,8 @@ The platform demonstrates different ingestion strategies depending on the source
 
 ### REST API
 
+Implemented:
+
 ```text
 Open-Meteo
 → Python
@@ -868,25 +1138,44 @@ Open-Meteo
 
 This demonstrates custom API ingestion when a managed connector is not appropriate.
 
-### AWS S3
+### PostgreSQL
+
+Operational source implemented:
 
 ```text
-AWS S3
-→ BigQuery Data Transfer Service
-→ BigQuery
+Cloud SQL PostgreSQL
+→ Weather API
 ```
 
-This demonstrates managed multi-cloud batch ingestion.
+CDC preparation is already versioned:
 
-### PostgreSQL
+```text
+PostgreSQL
+→ logical replication publication
+→ logical replication slot
+```
+
+The next step is:
 
 ```text
 PostgreSQL
 → Datastream
-→ BigQuery
+→ BigQuery RAW
 ```
 
-This demonstrates Change Data Capture for transactional databases.
+This will demonstrate Change Data Capture for transactional databases.
+
+### AWS S3
+
+Planned:
+
+```text
+AWS S3
+→ BigQuery Data Transfer Service
+→ BigQuery RAW
+```
+
+This will demonstrate managed multi-cloud batch ingestion for historical weather data.
 
 The objective is not to force every source through the same ingestion mechanism, but to select an appropriate ingestion strategy for each source.
 
@@ -900,10 +1189,11 @@ pyproject.toml
 
 Runtime dependencies remain specific to each workload.
 
-The Open-Meteo ingestion dependencies are defined in:
+Examples:
 
 ```text
 ingestion/open-meteo/requirements.txt
+api/weather-api/requirements.txt
 ```
 
 The local Airflow environment is configured through Docker Compose.
@@ -931,21 +1221,22 @@ terraform validate
 terraform plan
 ```
 
-For local Terraform operations, deployment-time values can be loaded from a non-committed `.env` file.
+Application image versions are not stored permanently in `.env`.
 
-Example:
-
-```bash
-TF_VAR_open_meteo_image_tag="your-image-tag"
-```
-
-With Git Bash:
+For normal local Terraform planning, retrieve the release state directly from Terraform:
 
 ```bash
-set -a
-source .env
-set +a
+export TF_VAR_open_meteo_image_tag="$(terraform output -raw open_meteo_image_tag)"
+export TF_VAR_weather_api_image_tag="$(terraform output -raw weather_api_image_tag)"
 ```
+
+Then:
+
+```bash
+terraform plan
+```
+
+For a deliberate Weather API release, the Weather API tag can be overridden with a candidate Git SHA before planning or applying.
 
 Local files such as:
 
@@ -980,11 +1271,17 @@ Permissions
 Authentication
 → short-lived credentials
 
+Secrets
+→ Secret Manager, no secret value in Git or Terraform state
+
 Application artifacts
 → immutable Git SHA image tags
 
 Configuration
 → stable configuration separated from release state
+
+API exposure
+→ API Gateway in front of a private Cloud Run backend
 
 Data
 → RAW / STAGING / CURATED separation
@@ -1014,7 +1311,7 @@ Environment
 → explicit dev deployment target
 
 Concurrency
-→ one application deployment at a time
+→ serialized application deployments
 ```
 
 ## Roadmap
@@ -1037,20 +1334,32 @@ Concurrency
 - [x] GitHub Actions CI
 - [x] Workload Identity Federation
 - [x] Terraform plan using remote state from GitHub Actions
-- [x] Automated Docker build
-- [x] Artifact Registry push from GitHub Actions
-- [x] Scoped CI/CD deployment permissions
+- [x] Automated Open-Meteo Docker build and Artifact Registry push
+- [x] Automated Open-Meteo Cloud Run deployment
+- [x] Post-deployment Open-Meteo smoke test
+- [x] Weather PostgreSQL operational model
+- [x] PostgreSQL schema, seed, roles and CDC prerequisites versioned in Git
+- [x] Weather API with FastAPI
+- [x] Weather API deployed as a private Cloud Run Service
+- [x] Cloud SQL Python Connector integration
+- [x] Secret Manager database credential integration
+- [x] API Gateway
+- [x] API key protection
+- [x] Dedicated API Gateway Service Account
+- [x] Weather API managed by Terraform
+- [x] API Gateway managed by Terraform
+- [x] Weather API immutable Git SHA images
+- [x] Weather API CI/CD
 - [x] GitHub `dev` deployment environment
 - [x] Master-only deployment protection
 - [x] Serialized deployment concurrency
-- [x] Automated Cloud Run deployment
-- [x] Post-deployment Cloud Run smoke test
-- [ ] Dataform Git integration
-- [ ] AWS S3 ingestion integration
+- [x] End-to-end Weather API smoke test through API Gateway
 - [ ] PostgreSQL CDC with Datastream integration
-- [ ] Monitoring and data quality
+- [ ] AWS S3 historical weather ingestion
+- [ ] Dataform Git integration
+- [ ] CURATED multi-source weather modeling
+- [ ] BigQuery Row-Level Security
+- [ ] BigQuery Column-Level Security / Policy Tags
+- [ ] Data quality hardening
+- [ ] Monitoring and alerting
 - [ ] Production-ready Airflow / Cloud Composer deployment
-
-```
-
-```
