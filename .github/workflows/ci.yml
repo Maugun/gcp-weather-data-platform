@@ -73,9 +73,11 @@ jobs:
       - name: Terraform validate
         run: terraform validate
 
-      - name: Load currently deployed image tag
+      - name: Load deployed application image tags
+        working-directory: infrastructure/terraform/environments/dev
         run: |
           echo "TF_VAR_open_meteo_image_tag=$(terraform output -raw open_meteo_image_tag)" >> "$GITHUB_ENV"
+          echo "TF_VAR_weather_api_image_tag=$(terraform output -raw weather_api_image_tag)" >> "$GITHUB_ENV"
 
       - name: Terraform plan
         run: terraform plan -input=false
