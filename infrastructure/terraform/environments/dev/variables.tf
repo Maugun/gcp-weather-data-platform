@@ -41,3 +41,9 @@ variable "weather_api_image_tag" {
   description = "Docker image tag deployed for the Weather API."
   type        = string
 }
+
+variable "aws_s3_access_key_id" {
+  description = "AWS access key ID used by BigQuery Data Transfer Service"
+  type        = string
+  sensitive   = true
+}

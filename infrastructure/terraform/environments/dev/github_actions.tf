@@ -10,6 +10,7 @@ locals {
     "roles/bigquery.metadataViewer",
     "roles/apigateway.viewer",
     "roles/datastream.viewer",
+    "roles/bigquery.user"
   ])
 }
 

@@ -2,10 +2,12 @@
 
 A production-oriented data engineering project built on Google Cloud Platform.
 
-The platform currently combines two complementary workloads:
+The platform currently combines multiple complementary workloads:
 
 - a batch weather data pipeline based on Open-Meteo, Cloud Run Jobs, GCS, BigQuery, Dataform and Airflow
 - an operational Weather API exposed through API Gateway, backed by a private Cloud Run service and Cloud SQL for PostgreSQL
+- PostgreSQL Change Data Capture with Datastream into BigQuery RAW
+- historical multi-cloud ingestion from Amazon S3 into BigQuery through BigQuery Data Transfer Service
 
 The project is progressively extended with additional ingestion patterns, Infrastructure as Code, security controls and CI/CD workflows.
 
@@ -32,6 +34,10 @@ flowchart LR
     PG --> DS[Datastream CDC]
     DS --> BQRAW
 
+    %% Multi-cloud historical ingestion
+    S3[Amazon S3 - historical weather] --> DTS[BigQuery Data Transfer Service]
+    DTS --> BQRAW
+
     %% CI/CD and IaC
     GH[GitHub Actions] --> WIF[Workload Identity Federation]
     WIF --> GHA[github-actions Service Account]
@@ -55,6 +61,9 @@ Client → API Gateway → Cloud Run → PostgreSQL
 CDC ingestion path
 PostgreSQL → Datastream → BigQuery RAW
 
+Historical batch ingestion path
+Amazon S3 → BigQuery Data Transfer Service → BigQuery RAW
+
 Delivery platform
 GitHub Actions → WIF → Artifact Registry → Terraform → GCP
 ```
@@ -68,6 +77,9 @@ GitHub Actions → WIF → Artifact Registry → Terraform → GCP
 - Cloud Run Services
 - Cloud SQL for PostgreSQL
 - Datastream
+- BigQuery Data Transfer Service
+- Amazon S3
+- Parquet
 - API Gateway
 - Secret Manager
 - Artifact Registry
@@ -106,9 +118,14 @@ GitHub Actions → WIF → Artifact Registry → Terraform → GCP
 │               ├── secret_manager.tf
 │               ├── api_gateway.tf
 │               ├── datastream.tf
+│               ├── bigquery_tables.tf
+│               ├── bigquery_transfer.tf
 │               ├── outputs.tf
 │               ├── terraform.tfvars.example
 │               └── .terraform.lock.hcl
+│
+│       └── schemas/
+│           └── s3_historical_weather.json
 │
 ├── ingestion/
 │   └── open-meteo/
@@ -143,6 +160,10 @@ GitHub Actions → WIF → Artifact Registry → Terraform → GCP
 │   └── dataform/
 │       ├── workflow_settings.yaml
 │       └── definitions/
+│
+├── scripts/
+│   ├── generate_historical_weather.py
+│   └── requirements.txt
 │
 ├── docs/
 │
@@ -385,6 +406,129 @@ The Datastream connection profiles, stream configuration, Secret Manager metadat
 
 For the development environment, the Datastream stream is normally kept paused and Cloud SQL stopped between test sessions to control cost.
 
+## AWS S3 Historical Weather Ingestion
+
+Historical weather data is generated as Parquet files and stored in Amazon S3 to represent an external upstream partner system.
+
+```text
+Historical weather generator
+    ↓
+Parquet
+    ↓
+Amazon S3
+    ↓
+BigQuery Data Transfer Service
+    ↓
+weather_raw.s3_historical_weather
+```
+
+The S3 layout follows a date-oriented hierarchy:
+
+```text
+historical/
+└── year=2026/
+    ├── month=08/
+    │   └── weather_2026_08.parquet
+    ├── month=09/
+    │   └── weather_2026_09.parquet
+    └── month=10/
+        └── weather_2026_10.parquet
+```
+
+The generated historical dataset uses the grain:
+
+```text
+one row
+=
+one station
++
+one observation timestamp
+```
+
+The destination table is:
+
+```text
+de-gcp-lab.weather_raw.s3_historical_weather
+```
+
+and is partitioned by `DATE(observed_at)` and clustered by `station_id`.
+
+The BigQuery Data Transfer configuration uses:
+
+```text
+Source
+→ Amazon S3
+
+File format
+→ Parquet
+
+Write disposition
+→ WRITE_APPEND
+
+Schedule
+→ on demand
+```
+
+The transfer was validated incrementally:
+
+```text
+Initial run
+→ August + September 2026
+→ 183 rows
+→ 3 stations
+
+Second run
+→ October 2026 added to S3
+→ +93 rows
+
+Final result
+→ 276 rows
+→ 3 stations
+```
+
+The second run loaded the newly added S3 object without duplicating the already transferred historical files.
+
+The S3 bucket and AWS IAM identity intentionally remain outside the GCP Terraform boundary because they represent an external upstream system. The GCP-side destination table, transfer configuration, Service Account, IAM and Secret Manager integration are managed with Terraform.
+
+### S3 Transfer Credentials
+
+The transfer uses two separate identities:
+
+```text
+GCP identity
+→ bigquery-s3-transfer Service Account
+
+AWS identity
+→ AWS access key ID + secret access key
+```
+
+The AWS secret access key is stored in Google Secret Manager as:
+
+```text
+aws-s3-secret-access-key
+```
+
+Terraform retrieves this value through an ephemeral Secret Manager resource and passes it to the BigQuery Data Transfer resource through the provider's write-only `secret_access_key_wo` argument.
+
+```text
+Secret Manager
+    ↓ ephemeral read
+Terraform
+    ↓ write-only argument
+BigQuery Data Transfer Service
+```
+
+This keeps the AWS secret access key out of:
+
+```text
+Git
+terraform.tfvars
+Terraform state
+Terraform plan output
+```
+
+The AWS access key ID remains a normal Terraform input because it is an identifier rather than the secret credential.
+
 ## Data Layers
 
 The project follows a layered data architecture.
@@ -544,6 +688,10 @@ Currently managed resources include:
 - Datastream PostgreSQL connection profile
 - Datastream BigQuery connection profile
 - Datastream PostgreSQL → BigQuery stream
+- BigQuery historical S3 destination table
+- BigQuery Amazon S3 Data Transfer configuration
+- dedicated BigQuery S3 transfer Service Account
+- AWS S3 secret metadata and scoped Secret Manager IAM
 - Dataform repository
 - GitHub Workload Identity Federation
 - required GCP service configuration
@@ -611,13 +759,16 @@ For example:
 
 ```text
 Terraform
-→ manages weather-db-password and datastream-db-password secret metadata and IAM
+→ manages weather-db-password, datastream-db-password and aws-s3-secret-access-key metadata and IAM
 
 Secret Manager
-→ stores the actual database passwords
+→ stores the actual PostgreSQL passwords and AWS secret access key
+
+Terraform ephemeral resource
+→ reads the AWS secret only during execution
 
 Terraform state
-→ does not contain either database password value
+→ does not contain these secret values
 ```
 
 ## Application Versioning
@@ -686,6 +837,7 @@ Key practices include:
 - separate runtime, gateway and CI/CD identities
 - private Cloud Run backend behind API Gateway
 - API key validation at the gateway layer
+- ephemeral Secret Manager reads for write-only external credentials
 
 ### Dataform Runtime Identity
 
@@ -801,6 +953,31 @@ Operations
 
 This allows the development environment to pause CDC and stop Cloud SQL between test sessions without creating Terraform drift.
 
+### BigQuery S3 Transfer Identity
+
+The Amazon S3 transfer uses the dedicated GCP identity:
+
+```text
+bigquery-s3-transfer
+```
+
+On the destination dataset:
+
+```text
+weather_raw
+└── BigQuery Data Editor
+```
+
+The AWS secret access key is stored in:
+
+```text
+aws-s3-secret-access-key
+```
+
+and is only read when Terraform needs to configure the transfer.
+
+The AWS bucket itself is treated as an external upstream system and is not managed by the GCP Terraform stack.
+
 ### GitHub Actions Identity
 
 GitHub Actions uses a dedicated identity:
@@ -842,9 +1019,14 @@ Datastream
 
 datastream-db-password
 └── Secret Manager Viewer for Terraform metadata refresh
+
+aws-s3-secret-access-key
+└── Secret Manager Secret Accessor for ephemeral Terraform reads
 ```
 
-GitHub Actions does not receive Secret Manager Secret Accessor permission for the database password.
+GitHub Actions does not receive Secret Manager Secret Accessor permission for the PostgreSQL database passwords.
+
+It receives Secret Accessor only on `aws-s3-secret-access-key`, because Terraform must read that external credential ephemerally to configure BigQuery Data Transfer Service.
 
 ## GitHub Authentication
 
@@ -1328,15 +1510,20 @@ This demonstrates Change Data Capture for a transactional database while keeping
 
 ### AWS S3
 
-Planned:
+Implemented:
 
 ```text
-AWS S3
+Historical weather Parquet
+→ Amazon S3
 → BigQuery Data Transfer Service
-→ BigQuery RAW
+→ weather_raw.s3_historical_weather
 ```
 
-This will demonstrate managed multi-cloud batch ingestion for historical weather data.
+The initial transfer loaded August and September 2026, producing 183 rows across three stations.
+
+After a new October Parquet object was added to S3, the next transfer loaded 93 additional rows for a total of 276 rows without duplicating previously transferred files.
+
+This demonstrates managed multi-cloud batch ingestion with an external object-storage source.
 
 The objective is not to force every source through the same ingestion mechanism, but to select an appropriate ingestion strategy for each source.
 
@@ -1355,7 +1542,10 @@ Examples:
 ```text
 ingestion/open-meteo/requirements.txt
 api/weather-api/requirements.txt
+scripts/requirements.txt
 ```
+
+`scripts/requirements.txt` contains the local dependencies used to generate historical Parquet test data, including `pandas` and `pyarrow`.
 
 The local Airflow environment is configured through Docker Compose.
 
@@ -1389,7 +1579,10 @@ For normal local Terraform planning, retrieve the release state directly from Te
 ```bash
 export TF_VAR_open_meteo_image_tag="$(terraform output -raw open_meteo_image_tag)"
 export TF_VAR_weather_api_image_tag="$(terraform output -raw weather_api_image_tag)"
+export TF_VAR_aws_s3_access_key_id="<AWS_ACCESS_KEY_ID>"
 ```
+
+The AWS secret access key is not exported as a Terraform variable. Terraform reads it ephemerally from Google Secret Manager.
 
 Then:
 
@@ -1446,6 +1639,15 @@ API exposure
 
 CDC
 → Datastream replicates PostgreSQL changes into BigQuery RAW
+
+Multi-cloud ingestion
+→ Amazon S3 transfers historical Parquet data through BigQuery Data Transfer Service
+
+External systems
+→ upstream AWS resources remain outside the GCP Terraform ownership boundary
+
+Secrets
+→ external AWS secret read ephemerally from Secret Manager and passed through a write-only Terraform argument
 
 Data
 → RAW / STAGING / CURATED separation
@@ -1523,7 +1725,14 @@ Concurrency
 - [x] Datastream connection profiles managed by Terraform
 - [x] Datastream stream managed by Terraform
 - [x] Datastream database credential stored in Secret Manager
-- [ ] AWS S3 historical weather ingestion
+- [x] AWS S3 historical weather ingestion
+- [x] Historical weather Parquet generator
+- [x] Incremental Amazon S3 → BigQuery transfer validation
+- [x] Dedicated BigQuery S3 transfer Service Account
+- [x] BigQuery S3 destination table managed by Terraform
+- [x] BigQuery Data Transfer configuration managed by Terraform
+- [x] AWS secret access key stored in Secret Manager
+- [x] Ephemeral / write-only Terraform handling for AWS secret credentials
 - [ ] Dataform Git integration
 - [ ] CURATED multi-source weather modeling
 - [ ] BigQuery Row-Level Security

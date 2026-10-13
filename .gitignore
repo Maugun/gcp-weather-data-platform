@@ -15,3 +15,6 @@ __pycache__/
 .env.*
 !.env.example
 application_default_credentials.json
+
+# Generated
+.generated/

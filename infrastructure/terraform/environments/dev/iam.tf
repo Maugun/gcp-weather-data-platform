@@ -114,3 +114,34 @@ resource "google_secret_manager_secret_iam_member" "github_actions_datastream_db
   role   = "roles/secretmanager.viewer"
   member = "serviceAccount:${google_service_account.github_actions.email}"
 }
+
+resource "google_bigquery_dataset_iam_member" "bigquery_s3_transfer_editor" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.datasets["weather_raw"].dataset_id
+  role       = "roles/bigquery.dataEditor"
+
+  member = "serviceAccount:${google_service_account.workloads["bigquery-s3-transfer"].email}"
+}
+
+resource "google_project_iam_member" "bigquery_s3_transfer_job_user" {
+  project = var.project_id
+  role    = "roles/bigquery.jobUser"
+
+  member = "serviceAccount:${google_service_account.workloads["bigquery-s3-transfer"].email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "github_actions_aws_s3_secret_viewer" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.aws_s3_secret_access_key.secret_id
+
+  role   = "roles/secretmanager.viewer"
+  member = "serviceAccount:${google_service_account.github_actions.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "github_actions_aws_s3_secret_accessor" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.aws_s3_secret_access_key.secret_id
+
+  role   = "roles/secretmanager.secretAccessor"
+  member = "serviceAccount:${google_service_account.github_actions.email}"
+}
