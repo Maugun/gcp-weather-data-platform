@@ -25,10 +25,12 @@ flowchart LR
     AF --> BQRAW
     AF --> DF
 
-    %% Operational API
+    %% Operational API + CDC
     CLIENT[API Client] --> GW[API Gateway]
     GW --> CRS[Cloud Run Service - weather-api]
     CRS --> PG[Cloud SQL PostgreSQL]
+    PG --> DS[Datastream CDC]
+    DS --> BQRAW
 
     %% CI/CD and IaC
     GH[GitHub Actions] --> WIF[Workload Identity Federation]
@@ -50,6 +52,9 @@ Open-Meteo → GCS → BigQuery → Dataform
 Operational API path
 Client → API Gateway → Cloud Run → PostgreSQL
 
+CDC ingestion path
+PostgreSQL → Datastream → BigQuery RAW
+
 Delivery platform
 GitHub Actions → WIF → Artifact Registry → Terraform → GCP
 ```
@@ -62,6 +67,7 @@ GitHub Actions → WIF → Artifact Registry → Terraform → GCP
 - Cloud Run Jobs
 - Cloud Run Services
 - Cloud SQL for PostgreSQL
+- Datastream
 - API Gateway
 - Secret Manager
 - Artifact Registry
@@ -99,6 +105,7 @@ GitHub Actions → WIF → Artifact Registry → Terraform → GCP
 │               ├── github_actions.tf
 │               ├── secret_manager.tf
 │               ├── api_gateway.tf
+│               ├── datastream.tf
 │               ├── outputs.tf
 │               ├── terraform.tfvars.example
 │               └── .terraform.lock.hcl
@@ -281,7 +288,102 @@ datastream-publication.sql
 datastream-slot.sql
 ```
 
-The Datastream publication and logical replication slot are already prepared for the upcoming CDC integration.
+The PostgreSQL source is connected to BigQuery through Datastream CDC.
+
+The source-side replication objects are:
+
+```text
+Publication
+→ weather_datastream_publication
+
+Replication slot
+→ weather_datastream_slot
+```
+
+Datastream replicates only:
+
+```text
+public.weather_stations
+public.weather_observations
+```
+
+into:
+
+```text
+weather_raw.public_weather_stations
+weather_raw.public_weather_observations
+```
+
+The stream uses BigQuery `Merge` mode with a maximum freshness of 15 minutes. Initial backfill and live CDC have both been validated with `INSERT`, `UPDATE` and `DELETE` operations.
+
+For cost control in the development environment, Cloud SQL can remain stopped and the Datastream stream paused between test sessions. Terraform manages the stream configuration, while the operational `RUNNING` / `PAUSED` state is intentionally controlled outside Terraform.
+
+## PostgreSQL CDC with Datastream
+
+The operational PostgreSQL source is replicated into BigQuery RAW using Google Cloud Datastream.
+
+```text
+Cloud SQL PostgreSQL
+    ↓ logical decoding / WAL
+Datastream
+    ↓ CDC
+BigQuery RAW
+```
+
+The source connection profile uses the `postgres` database and the dedicated `datastream` PostgreSQL role. Connectivity uses Datastream static public IP allowlisting against the Cloud SQL public endpoint.
+
+The PostgreSQL password is stored in Secret Manager as:
+
+```text
+datastream-db-password
+```
+
+Datastream references the secret through Secret Manager rather than storing the credential in Git or Terraform.
+
+The stream:
+
+```text
+weather-postgres-to-bigquery
+```
+
+replicates:
+
+```text
+public.weather_stations
+public.weather_observations
+```
+
+into the `weather_raw` BigQuery dataset.
+
+The destination configuration uses:
+
+```text
+Mode
+→ Merge
+
+Data freshness
+→ 900s
+
+Backfill
+→ enabled
+```
+
+The CDC behavior has been validated end-to-end:
+
+```text
+INSERT PostgreSQL
+→ row appears in BigQuery
+
+UPDATE PostgreSQL
+→ row is updated in BigQuery
+
+DELETE PostgreSQL
+→ row is removed from BigQuery
+```
+
+The Datastream connection profiles, stream configuration, Secret Manager metadata and related IAM are managed with Terraform.
+
+For the development environment, the Datastream stream is normally kept paused and Cloud SQL stopped between test sessions to control cost.
 
 ## Data Layers
 
@@ -439,6 +541,9 @@ Currently managed resources include:
 - API Gateway API
 - API Gateway API Config
 - API Gateway Gateway
+- Datastream PostgreSQL connection profile
+- Datastream BigQuery connection profile
+- Datastream PostgreSQL → BigQuery stream
 - Dataform repository
 - GitHub Workload Identity Federation
 - required GCP service configuration
@@ -506,13 +611,13 @@ For example:
 
 ```text
 Terraform
-→ manages weather-db-password secret metadata and IAM
+→ manages weather-db-password and datastream-db-password secret metadata and IAM
 
 Secret Manager
-→ stores the actual database password
+→ stores the actual database passwords
 
 Terraform state
-→ does not contain the database password value
+→ does not contain either database password value
 ```
 
 ## Application Versioning
@@ -661,6 +766,41 @@ roles/run.invoker
 
 This separates public API routing from application runtime permissions.
 
+### Datastream Identity and Secrets
+
+Datastream uses its Google-managed service agent:
+
+```text
+service-<project-number>@gcp-sa-datastream.iam.gserviceaccount.com
+```
+
+The service agent receives:
+
+```text
+Secret Manager Secret Accessor
+→ datastream-db-password only
+```
+
+The PostgreSQL replication login is:
+
+```text
+datastream
+```
+
+and the password is referenced from Secret Manager by the Datastream PostgreSQL connection profile.
+
+The stream's operational state is deliberately not enforced by Terraform:
+
+```text
+Terraform
+→ source, destination, tables, publication, slot, freshness, merge, backfill
+
+Operations
+→ RUNNING / PAUSED
+```
+
+This allows the development environment to pause CDC and stop Cloud SQL between test sessions without creating Terraform drift.
+
 ### GitHub Actions Identity
 
 GitHub Actions uses a dedicated identity:
@@ -695,6 +835,12 @@ API Gateway
 └── Viewer for Terraform plan
 
 weather-db-password
+└── Secret Manager Viewer for Terraform metadata refresh
+
+Datastream
+└── Datastream Viewer for Terraform plan
+
+datastream-db-password
 └── Secret Manager Viewer for Terraform metadata refresh
 ```
 
@@ -1140,30 +1286,45 @@ This demonstrates custom API ingestion when a managed connector is not appropria
 
 ### PostgreSQL
 
-Operational source implemented:
+The same Cloud SQL PostgreSQL instance demonstrates two different workload patterns.
+
+Operational API path:
 
 ```text
 Cloud SQL PostgreSQL
 → Weather API
 ```
 
-CDC preparation is already versioned:
+CDC analytics path:
 
 ```text
-PostgreSQL
-→ logical replication publication
-→ logical replication slot
-```
-
-The next step is:
-
-```text
-PostgreSQL
+Cloud SQL PostgreSQL
 → Datastream
 → BigQuery RAW
 ```
 
-This will demonstrate Change Data Capture for transactional databases.
+The CDC integration is implemented and validated with:
+
+```text
+Initial backfill ✅
+INSERT replication ✅
+UPDATE replication ✅
+DELETE replication ✅
+```
+
+Datastream writes:
+
+```text
+public.weather_stations
+→ weather_raw.public_weather_stations
+
+public.weather_observations
+→ weather_raw.public_weather_observations
+```
+
+using BigQuery `Merge` mode.
+
+This demonstrates Change Data Capture for a transactional database while keeping the operational API and analytics ingestion concerns separate.
 
 ### AWS S3
 
@@ -1283,6 +1444,9 @@ Configuration
 API exposure
 → API Gateway in front of a private Cloud Run backend
 
+CDC
+→ Datastream replicates PostgreSQL changes into BigQuery RAW
+
 Data
 → RAW / STAGING / CURATED separation
 
@@ -1354,7 +1518,11 @@ Concurrency
 - [x] Master-only deployment protection
 - [x] Serialized deployment concurrency
 - [x] End-to-end Weather API smoke test through API Gateway
-- [ ] PostgreSQL CDC with Datastream integration
+- [x] PostgreSQL CDC with Datastream integration
+- [x] PostgreSQL CDC INSERT / UPDATE / DELETE validation
+- [x] Datastream connection profiles managed by Terraform
+- [x] Datastream stream managed by Terraform
+- [x] Datastream database credential stored in Secret Manager
 - [ ] AWS S3 historical weather ingestion
 - [ ] Dataform Git integration
 - [ ] CURATED multi-source weather modeling

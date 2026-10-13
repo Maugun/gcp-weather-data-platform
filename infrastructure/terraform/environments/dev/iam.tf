@@ -97,3 +97,20 @@ resource "google_service_account_iam_member" "github_actions_weather_api_user" {
   role   = "roles/iam.serviceAccountUser"
   member = "serviceAccount:${google_service_account.github_actions.email}"
 }
+
+resource "google_secret_manager_secret_iam_member" "datastream_secret_accessor" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.datastream_db_password.secret_id
+
+  role = "roles/secretmanager.secretAccessor"
+
+  member = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-datastream.iam.gserviceaccount.com"
+}
+
+resource "google_secret_manager_secret_iam_member" "github_actions_datastream_db_viewer" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.datastream_db_password.secret_id
+
+  role   = "roles/secretmanager.viewer"
+  member = "serviceAccount:${google_service_account.github_actions.email}"
+}

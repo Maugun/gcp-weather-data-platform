@@ -9,6 +9,7 @@ locals {
     "roles/dataform.viewer",
     "roles/bigquery.metadataViewer",
     "roles/apigateway.viewer",
+    "roles/datastream.viewer",
   ])
 }
 
