@@ -9,8 +9,8 @@ resource "google_api_gateway_api_config" "weather_v3" {
   provider = google-beta
   project  = var.project_id
 
-  api           = google_api_gateway_api.weather.api_id
-  api_config_id = "weather-api-v3"
+  api                  = google_api_gateway_api.weather.api_id
+  api_config_id_prefix = "weather-api-"
 
   gateway_config {
     backend_config {

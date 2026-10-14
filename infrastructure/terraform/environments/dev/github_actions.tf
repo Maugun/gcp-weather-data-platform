@@ -1,16 +1,16 @@
 locals {
   github_actions_plan_roles = toset([
+    "roles/apigateway.editor",
+    "roles/artifactregistry.reader",
     "roles/browser",
+    "roles/bigquery.metadataViewer",
+    "roles/bigquery.user",
+    "roles/dataform.viewer",
+    "roles/datastream.viewer",
     "roles/iam.securityReviewer",
     "roles/iam.serviceAccountViewer",
     "roles/iam.workloadIdentityPoolViewer",
     "roles/run.viewer",
-    "roles/artifactregistry.reader",
-    "roles/dataform.viewer",
-    "roles/bigquery.metadataViewer",
-    "roles/apigateway.viewer",
-    "roles/datastream.viewer",
-    "roles/bigquery.user"
   ])
 }
 
@@ -84,6 +84,13 @@ resource "google_cloud_run_v2_job_iam_member" "github_actions_developer" {
 
 resource "google_service_account_iam_member" "github_actions_open_meteo_user" {
   service_account_id = google_service_account.workloads["open-meteo-ingestion"].name
+
+  role   = "roles/iam.serviceAccountUser"
+  member = "serviceAccount:${google_service_account.github_actions.email}"
+}
+
+resource "google_service_account_iam_member" "github_actions_weather_api_gateway_user" {
+  service_account_id = google_service_account.workloads["weather-api-gateway"].name
 
   role   = "roles/iam.serviceAccountUser"
   member = "serviceAccount:${google_service_account.github_actions.email}"

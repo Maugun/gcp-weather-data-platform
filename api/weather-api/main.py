@@ -58,6 +58,11 @@ def health():
     return {"status": "ok", "database": result["ok"] == 1}
 
 
+@app.get("/live")
+def live():
+    return {"status": "ok"}
+
+
 @app.get("/stations")
 def get_stations():
     query = text(

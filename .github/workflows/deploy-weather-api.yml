@@ -105,4 +105,4 @@ jobs:
             --show-error \
             --get \
             --data-urlencode "key=${WEATHER_API_KEY}" \
-            "https://${GATEWAY_HOST}/health"
+            "https://${GATEWAY_HOST}/live"

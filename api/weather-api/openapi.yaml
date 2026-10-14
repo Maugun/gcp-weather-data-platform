@@ -34,6 +34,15 @@ paths:
         "200":
           description: API is healthy
 
+  /live:
+    get:
+      operationId: live
+      responses:
+        "200":
+          description: Service is alive
+          schema:
+            type: object
+
   /stations:
     get:
       operationId: getStations
