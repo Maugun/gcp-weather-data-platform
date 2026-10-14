@@ -1,0 +1,5 @@
+defaultProject: de-gcp-lab
+defaultDataset: weather_staging
+defaultLocation: EU
+defaultAssertionDataset: dataform_assertions
+dataformCoreVersion: "3.0.62"
