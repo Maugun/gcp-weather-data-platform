@@ -19,7 +19,7 @@ from airflow.sdk import DAG
 
 PROJECT_ID = "de-gcp-lab"
 DATAFORM_REGION = "europe-west9"
-DATAFORM_REPOSITORY_ID = "ecommerce-dataform"
+DATAFORM_REPOSITORY_ID = "weather-dataform"
 DATAFORM_WORKSPACE_ID = "dev"
 DATAFORM_SERVICE_ACCOUNT = "dataform-runner@de-gcp-lab.iam.gserviceaccount.com"
 

@@ -145,3 +145,15 @@ resource "google_secret_manager_secret_iam_member" "github_actions_aws_s3_secret
   role   = "roles/secretmanager.secretAccessor"
   member = "serviceAccount:${google_service_account.github_actions.email}"
 }
+
+resource "google_project_iam_member" "dataform_service_agent_developer_connect" {
+  for_each = toset([
+    "roles/developerconnect.gitProxyUser",
+    "roles/developerconnect.tokenAccessor",
+  ])
+
+  project = var.project_id
+  role    = each.value
+
+  member = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-dataform.iam.gserviceaccount.com"
+}

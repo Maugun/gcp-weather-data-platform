@@ -656,6 +656,27 @@ transformation/dataform/
 
 Transformations are versioned as code and executed programmatically by Airflow using the Dataform API.
 
+### Git integration and repository synchronization
+
+The Dataform project is maintained in this platform repository under `transformation/dataform/` as a Git subtree. The local Git remote named `dataform` points to the dedicated GitHub repository [Maugun/gcp-weather-dataform](https://github.com/Maugun/gcp-weather-dataform).
+
+After committing Dataform changes in the platform repository, publish that subtree to the `master` branch of its dedicated repository with:
+
+```bash
+git subtree push --prefix=transformation/dataform dataform master
+```
+
+This sends the contents and history of `transformation/dataform/` to the Dataform repository without publishing the rest of the platform repository there. The subtree push is currently a manual step.
+
+Terraform connects the GCP Dataform repository to GitHub through Developer Connect:
+
+- Developer Connect connection: `github-dataform` in `europe-west9`.
+- Git repository link: `Maugun-gcp-weather-dataform`.
+- GCP Dataform repository: `weather-dataform`, in `europe-west9`, using `master` as its default branch.
+- Dataform runtime service account: `dataform-runner`.
+
+The Airflow DAG compiles and invokes the `weather-dataform` repository through the Dataform API, using the `dev` workspace. A manual compilation and workflow run against the Git-integrated repository has been completed successfully.
+
 The STAGING model uses:
 
 - incremental processing
@@ -1733,7 +1754,7 @@ Concurrency
 - [x] BigQuery Data Transfer configuration managed by Terraform
 - [x] AWS secret access key stored in Secret Manager
 - [x] Ephemeral / write-only Terraform handling for AWS secret credentials
-- [ ] Dataform Git integration
+- [x] Dataform Git integration
 - [ ] CURATED multi-source weather modeling
 - [ ] BigQuery Row-Level Security
 - [ ] BigQuery Column-Level Security / Policy Tags
