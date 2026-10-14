@@ -16,7 +16,7 @@ config {
     clusterBy: ["location_name"],
     updatePartitionFilter: dataform.projectConfig.vars.target_date
       ? `date = DATE('${dataform.projectConfig.vars.target_date}')`
-      : "TRUE"
+      : "date IS NOT NULL"
   }
 }
 
