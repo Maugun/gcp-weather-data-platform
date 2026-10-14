@@ -14,7 +14,9 @@ config {
   bigquery: {
     partitionBy: "date",
     clusterBy: ["location_name"],
-    updatePartitionFilter: `date = DATE('${dataform.projectConfig.vars.target_date}')`
+    updatePartitionFilter: dataform.projectConfig.vars.target_date
+      ? `date = DATE('${dataform.projectConfig.vars.target_date}')`
+      : "TRUE"
   }
 }
 
@@ -37,7 +39,7 @@ SELECT
 FROM ${ref("open_meteo")}
 
 ${when(
-  incremental(),
+  incremental() && dataform.projectConfig.vars.target_date,
   `WHERE date = DATE('${dataform.projectConfig.vars.target_date}')`,
   ``
 )}
