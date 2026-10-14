@@ -78,7 +78,7 @@ resource "google_cloud_run_v2_service" "weather_api" {
 
       env {
         name  = "INSTANCE_CONNECTION_NAME"
-        value = "de-gcp-lab:europe-west1:weather-postgres"
+        value = "${var.project_id}:${var.region}:weather-postgres"
       }
 
       env {

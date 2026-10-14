@@ -15,12 +15,6 @@ variable "data_location" {
   default     = "EU"
 }
 
-variable "environment" {
-  description = "Deployment environment."
-  type        = string
-  default     = "dev"
-}
-
 variable "dataform_region" {
   description = "GCP region used by Dataform."
   type        = string

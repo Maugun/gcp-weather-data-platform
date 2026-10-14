@@ -2,7 +2,7 @@ resource "google_dataform_repository" "weather_git" {
   provider = google-beta
 
   project         = var.project_id
-  region          = "europe-west9"
+  region          = var.dataform_region
   name            = "weather-dataform"
   service_account = google_service_account.workloads["dataform-runner"].email
 
