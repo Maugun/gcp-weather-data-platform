@@ -20,6 +20,14 @@ resource "google_bigquery_dataset_iam_member" "dataform_staging_editor" {
   member = "serviceAccount:${google_service_account.workloads["dataform-runner"].email}"
 }
 
+resource "google_bigquery_dataset_iam_member" "dataform_curated_editor" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.datasets["weather_curated"].dataset_id
+
+  role   = "roles/bigquery.dataEditor"
+  member = "serviceAccount:${google_service_account.workloads["dataform-runner"].email}"
+}
+
 resource "google_bigquery_dataset_iam_member" "dataform_assertions_editor" {
   project    = var.project_id
   dataset_id = google_bigquery_dataset.datasets["dataform_assertions"].dataset_id
