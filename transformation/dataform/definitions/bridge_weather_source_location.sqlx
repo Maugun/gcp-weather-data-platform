@@ -1,0 +1,78 @@
+config {
+  type: "table",
+  schema: "weather_curated",
+  name: "bridge_weather_source_location",
+  tags: ["weather", "curated", "locations"],
+
+  assertions: {
+    uniqueKey: ["source_system", "source_location_key"],
+    nonNull: [
+      "source_system",
+      "source_location_key",
+      "location_id",
+      "source_location_type",
+      "mapping_method"
+    ]
+  }
+}
+
+WITH open_meteo_location_map AS (
+  -- Open-Meteo provides a city name but no country code in this project.
+  SELECT *
+  FROM UNNEST([
+    STRUCT("paris" AS source_location_normalized, "Paris" AS city_name, "FR" AS country_code)
+  ])
+),
+
+source_locations AS (
+  SELECT
+    "postgresql_datastream" AS source_system,
+    CAST(station_id AS STRING) AS source_location_key,
+    city AS city_name,
+    UPPER(country_code) AS country_code,
+    "station" AS source_location_type,
+    "station_city_country" AS mapping_method
+  FROM ${ref("stg_postgres_weather_stations")}
+
+  UNION ALL
+
+  SELECT DISTINCT
+    "s3_historical_weather" AS source_system,
+    CAST(station_id AS STRING) AS source_location_key,
+    city AS city_name,
+    UPPER(country_code) AS country_code,
+    "station" AS source_location_type,
+    "station_city_country" AS mapping_method
+  FROM ${ref("stg_s3_historical_weather")}
+
+  UNION ALL
+
+  SELECT
+    "open_meteo" AS source_system,
+    CAST(api_location.location_name AS STRING) AS source_location_key,
+    location_map.city_name,
+    location_map.country_code,
+    "city" AS source_location_type,
+    IF(
+      location_map.source_location_normalized IS NULL,
+      "unmapped_open_meteo_location",
+      "explicit_api_city_mapping"
+    ) AS mapping_method
+  FROM (
+    SELECT DISTINCT location_name
+    FROM ${ref("stg_open_meteo")}
+  ) AS api_location
+  LEFT JOIN open_meteo_location_map AS location_map
+    ON LOWER(TRIM(api_location.location_name)) = location_map.source_location_normalized
+)
+
+SELECT
+  source_location.source_system,
+  source_location.source_location_key,
+  weather_location.location_id,
+  source_location.source_location_type,
+  source_location.mapping_method
+FROM source_locations AS source_location
+LEFT JOIN ${ref("dim_weather_location")} AS weather_location
+  ON LOWER(TRIM(source_location.city_name)) = LOWER(weather_location.city_name)
+  AND UPPER(TRIM(source_location.country_code)) = weather_location.country_code

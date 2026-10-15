@@ -1,0 +1,22 @@
+config {
+  type: "table",
+  schema: "weather_curated",
+  name: "dim_weather_location",
+  tags: ["weather", "curated", "locations"],
+
+  assertions: {
+    uniqueKey: ["location_id"],
+    nonNull: ["location_id", "city_name", "country_code", "location_level"]
+  }
+}
+
+-- One row per canonical city. Source-specific identifiers live in the bridge model.
+SELECT *
+FROM UNNEST([
+  STRUCT("FR-LYON" AS location_id, "Lyon" AS city_name, "FR" AS country_code, "city" AS location_level),
+  STRUCT("FR-PARIS" AS location_id, "Paris" AS city_name, "FR" AS country_code, "city" AS location_level),
+  STRUCT("US-NEW-YORK" AS location_id, "New York" AS city_name, "US" AS country_code, "city" AS location_level),
+  STRUCT("US-SAN-FRANCISCO" AS location_id, "San Francisco" AS city_name, "US" AS country_code, "city" AS location_level),
+  STRUCT("JP-TOKYO" AS location_id, "Tokyo" AS city_name, "JP" AS country_code, "city" AS location_level),
+  STRUCT("SG-SINGAPORE" AS location_id, "Singapore" AS city_name, "SG" AS country_code, "city" AS location_level)
+])
