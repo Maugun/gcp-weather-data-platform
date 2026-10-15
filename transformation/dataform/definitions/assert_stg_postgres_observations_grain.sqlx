@@ -1,0 +1,11 @@
+config {
+  type: "assertion",
+  tags: ["weather", "postgres"]
+}
+
+SELECT
+  station_id,
+  observed_at
+FROM ${ref("stg_postgres_weather_observations")}
+GROUP BY station_id, observed_at
+HAVING COUNT(*) > 1

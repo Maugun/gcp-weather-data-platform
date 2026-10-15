@@ -1,0 +1,28 @@
+config {
+  type: "table",
+  schema: "weather_staging",
+  name: "stg_s3_historical_weather",
+  tags: ["weather", "s3"],
+
+  assertions: {
+    uniqueKey: ["station_id", "observed_at"],
+    nonNull: ["station_id", "observed_at"]
+  }
+}
+
+SELECT
+  station_id,
+  station_name,
+  city,
+  country_code,
+  region,
+  latitude,
+  longitude,
+  observed_at,
+  temperature_c,
+  humidity_percent,
+  precipitation_mm,
+  wind_speed_kmh,
+  source_updated_at,
+  "s3_historical_weather" AS _source
+FROM ${ref("s3_historical_weather")}

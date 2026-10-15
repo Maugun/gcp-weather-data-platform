@@ -1,0 +1,26 @@
+config {
+  type: "table",
+  schema: "weather_staging",
+  name: "stg_postgres_weather_observations",
+  tags: ["weather", "postgres"],
+
+  assertions: {
+    uniqueKey: ["observation_id"],
+    nonNull: ["observation_id", "station_id", "observed_at"]
+  }
+}
+
+SELECT
+  observation_id,
+  station_id,
+  observed_at,
+  temperature_celsius,
+  humidity_percent,
+  precipitation_mm,
+  wind_speed_kmh,
+  created_at,
+  updated_at,
+  datastream_metadata.uuid AS _datastream_event_id,
+  TIMESTAMP_MILLIS(datastream_metadata.source_timestamp) AS _source_changed_at,
+  "postgresql_datastream" AS _source
+FROM ${ref("public_weather_observations")}
