@@ -562,6 +562,15 @@ _ingested_at
 _run_id
 ```
 
+The multi-source STAGING layer keeps each source-specific model separate:
+
+- `stg_open_meteo`: daily weather by `(date, location_name)`, incrementally merged.
+- `stg_postgres_weather_stations`: the current PostgreSQL station dimension, keyed by `station_id`.
+- `stg_postgres_weather_observations`: current PostgreSQL observations, retaining `observation_id` and checking the business grain `(station_id, observed_at)`.
+- `stg_s3_historical_weather`: historical S3 observations at `(station_id, observed_at)`.
+
+The PostgreSQL models are rebuilt from the current Datastream BigQuery tables so source-side deletes are reflected in STAGING. Datastream metadata is retained as lineage, while `operator_email` is excluded because it is not needed by the analytical models. S3 and PostgreSQL weather metrics remain source-specific until CURATED defines compatible business semantics.
+
 ### CURATED
 
 The curated layer contains data prepared for downstream analytics and business use cases.
@@ -681,7 +690,7 @@ Terraform connects the GCP Dataform repository to GitHub through Developer Conne
 
 The Airflow DAG compiles and invokes the `weather-dataform` repository through the Dataform API, using the `dev` workspace. A manual compilation and workflow run against the Git-integrated repository has been completed successfully.
 
-The STAGING model uses:
+The Open-Meteo STAGING model uses:
 
 - incremental processing
 - `uniqueKey`
@@ -693,6 +702,10 @@ The STAGING model uses:
 - processing-date variables
 
 This makes transformations deterministic and safe to replay.
+
+The multi-source PostgreSQL and S3 STAGING models are full table models over their current RAW state. They use Dataform assertions to enforce their source keys and required columns.
+
+The multi-source STAGING workflow was executed successfully in the `git-test` development workspace, including all four models and their assertions. At validation time, the staged row counts were 3 Open-Meteo rows, 12 PostgreSQL observations, 6 PostgreSQL stations and 276 S3 historical observations; the PostgreSQL and S3 counts matched the corresponding RAW source checks.
 
 ## Infrastructure as Code
 
@@ -1759,6 +1772,7 @@ Concurrency
 - [x] AWS secret access key stored in Secret Manager
 - [x] Ephemeral / write-only Terraform handling for AWS secret credentials
 - [x] Dataform Git integration
+- [x] STAGING multi-source weather modeling
 - [ ] CURATED multi-source weather modeling
 - [ ] BigQuery Row-Level Security
 - [ ] BigQuery Column-Level Security / Policy Tags
