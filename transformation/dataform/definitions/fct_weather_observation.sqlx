@@ -1,0 +1,70 @@
+config {
+  type: "table",
+  schema: "weather_curated",
+  name: "fct_weather_observation",
+  tags: ["weather", "curated", "observations"],
+
+  assertions: {
+    uniqueKey: ["source_system", "source_record_id"],
+    nonNull: [
+      "source_system",
+      "source_record_id",
+      "source_location_key",
+      "location_id",
+      "observed_at"
+    ]
+  }
+}
+
+-- Grain: one source observation. PostgreSQL keeps its observation_id;
+-- S3 uses station_id + observed_at because it has no source observation ID.
+WITH source_observations AS (
+  SELECT
+    "postgresql_datastream" AS source_system,
+    CAST(station_id AS STRING) AS source_location_key,
+    CAST(observation_id AS STRING) AS source_record_id,
+    observation_id,
+    observed_at,
+    CAST(temperature_celsius AS FLOAT64) AS temperature_celsius,
+    CAST(humidity_percent AS FLOAT64) AS humidity_percent,
+    CAST(precipitation_mm AS FLOAT64) AS precipitation_mm,
+    CAST(wind_speed_kmh AS FLOAT64) AS wind_speed_kmh,
+    updated_at AS source_updated_at
+  FROM ${ref("stg_postgres_weather_observations")}
+
+  UNION ALL
+
+  SELECT
+    "s3_historical_weather" AS source_system,
+    CAST(station_id AS STRING) AS source_location_key,
+    CONCAT(
+      CAST(station_id AS STRING),
+      "|",
+      FORMAT_TIMESTAMP("%Y-%m-%dT%H:%M:%E6SZ", observed_at)
+    ) AS source_record_id,
+    CAST(NULL AS INT64) AS observation_id,
+    observed_at,
+    CAST(temperature_c AS FLOAT64) AS temperature_celsius,
+    CAST(humidity_percent AS FLOAT64) AS humidity_percent,
+    CAST(precipitation_mm AS FLOAT64) AS precipitation_mm,
+    CAST(wind_speed_kmh AS FLOAT64) AS wind_speed_kmh,
+    source_updated_at
+  FROM ${ref("stg_s3_historical_weather")}
+)
+
+SELECT
+  source_observations.source_system,
+  source_observations.source_record_id,
+  source_observations.source_location_key,
+  source_location.location_id,
+  source_observations.observation_id,
+  source_observations.observed_at,
+  source_observations.temperature_celsius,
+  source_observations.humidity_percent,
+  source_observations.precipitation_mm,
+  source_observations.wind_speed_kmh,
+  source_observations.source_updated_at
+FROM source_observations
+LEFT JOIN ${ref("bridge_weather_source_location")} AS source_location
+  ON source_observations.source_system = source_location.source_system
+  AND source_observations.source_location_key = source_location.source_location_key
