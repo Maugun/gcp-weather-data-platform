@@ -1,0 +1,59 @@
+config {
+  type: "table",
+  schema: "weather_curated",
+  name: "fct_weather_daily_open_meteo",
+  tags: ["weather", "curated", "daily", "open_meteo"],
+
+  assertions: {
+    uniqueKey: ["location_id", "observation_date"],
+    nonNull: ["location_id", "observation_date", "source_location_key"]
+  },
+
+  bigquery: {
+    partitionBy: "observation_date",
+    clusterBy: ["location_id"]
+  }
+}
+
+-- Grain: one Open-Meteo daily record per canonical location and date.
+WITH daily_weather AS (
+  SELECT
+    "open_meteo" AS source_system,
+    CAST(location_name AS STRING) AS source_location_key,
+    date AS observation_date,
+    latitude AS source_latitude,
+    longitude AS source_longitude,
+    timezone,
+    temperature_2m_max,
+    temperature_2m_min,
+    temperature_2m_mean,
+    precipitation_sum,
+    rain_sum,
+    wind_speed_10m_max,
+    weather_code,
+    _ingested_at AS source_ingested_at,
+    _run_id AS source_run_id
+  FROM ${ref("stg_open_meteo")}
+)
+
+SELECT
+  daily_weather.source_system,
+  source_location.location_id,
+  daily_weather.observation_date,
+  daily_weather.source_location_key,
+  daily_weather.source_latitude,
+  daily_weather.source_longitude,
+  daily_weather.timezone,
+  daily_weather.temperature_2m_max,
+  daily_weather.temperature_2m_min,
+  daily_weather.temperature_2m_mean,
+  daily_weather.precipitation_sum,
+  daily_weather.rain_sum,
+  daily_weather.wind_speed_10m_max,
+  daily_weather.weather_code,
+  daily_weather.source_ingested_at,
+  daily_weather.source_run_id
+FROM daily_weather
+LEFT JOIN ${ref("bridge_weather_source_location")} AS source_location
+  ON daily_weather.source_system = source_location.source_system
+  AND daily_weather.source_location_key = source_location.source_location_key
