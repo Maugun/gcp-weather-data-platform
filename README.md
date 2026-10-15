@@ -164,6 +164,23 @@ GitHub Actions → WIF → Artifact Registry → Terraform → GCP
 │   └── dataform/
 │       ├── workflow_settings.yaml
 │       └── definitions/
+│           ├── sources/
+│           │   └── raw_sources.js
+│           ├── staging/
+│           │   ├── stg_open_meteo.sqlx
+│           │   ├── stg_postgres_weather_observations.sqlx
+│           │   ├── stg_postgres_weather_stations.sqlx
+│           │   ├── stg_s3_historical_weather.sqlx
+│           │   └── assertions/
+│           │       └── assert_stg_postgres_observations_grain.sqlx
+│           └── curated/
+│               ├── dimensions/
+│               │   └── dim_weather_location.sqlx
+│               ├── bridges/
+│               │   └── bridge_weather_source_location.sqlx
+│               └── facts/
+│                   ├── fct_weather_observation.sqlx
+│                   └── fct_weather_daily_open_meteo.sqlx
 │
 ├── scripts/
 │   ├── generate_historical_weather.py
@@ -569,15 +586,18 @@ The multi-source STAGING layer keeps each source-specific model separate:
 - `stg_postgres_weather_observations`: current PostgreSQL observations, retaining `observation_id` and checking the business grain `(station_id, observed_at)`.
 - `stg_s3_historical_weather`: historical S3 observations at `(station_id, observed_at)`.
 
-The PostgreSQL models are rebuilt from the current Datastream BigQuery tables so source-side deletes are reflected in STAGING. Datastream metadata is retained as lineage, while `operator_email` is excluded because it is not needed by the analytical models. S3 and PostgreSQL weather metrics remain source-specific until CURATED defines compatible business semantics.
+The PostgreSQL models are rebuilt from the current Datastream BigQuery tables so source-side deletes are reflected in STAGING. Datastream metadata is retained as lineage, while `operator_email` is excluded because it is not needed by the analytical models. The source models remain separate in STAGING; CURATED standardizes compatible point-observation fields while keeping daily Open-Meteo metrics at their native daily grain.
 
 ### CURATED
 
-The curated layer contains data prepared for downstream analytics and business use cases.
+The curated layer contains data prepared for downstream analytics and business use cases. It currently combines the three sources through a canonical city dimension and a source-location bridge:
 
-It is separated from STAGING so that technical transformations and business-facing models can evolve independently.
+- `dim_weather_location`: one row per canonical city, with six locations across France, the United States, Japan and Singapore.
+- `bridge_weather_source_location`: maps each source identifier to a canonical `location_id`; the current mapping contains 6 PostgreSQL, 3 S3 and 1 Open-Meteo key.
+- `fct_weather_observation`: PostgreSQL and S3 observations at source-record/timestamp grain. PostgreSQL `observation_id` is retained; S3 uses a source record key built from station and timestamp.
+- `fct_weather_daily_open_meteo`: Open-Meteo daily metrics at `(location_id, observation_date)` grain.
 
-The next iterations will extend CURATED into a multi-source weather model combining external API, PostgreSQL CDC and historical S3 data.
+Both fact models use the same canonical `location_id`, but remain separate so daily API aggregates are not mixed with timestamped station observations. Dataform assertions validate keys and required mapping fields.
 
 ## Open-Meteo Ingestion
 
@@ -665,6 +685,13 @@ The Dataform project contains:
 transformation/dataform/
 ├── workflow_settings.yaml
 └── definitions/
+    ├── sources/             # RAW declarations
+    ├── staging/             # source-specific STAGING models
+    │   └── assertions/      # custom data assertions
+    └── curated/
+        ├── dimensions/
+        ├── bridges/
+        └── facts/
 ```
 
 Transformations are versioned as code and executed programmatically by Airflow using the Dataform API.
@@ -705,7 +732,7 @@ This makes transformations deterministic and safe to replay.
 
 The multi-source PostgreSQL and S3 STAGING models are full table models over their current RAW state. They use Dataform assertions to enforce their source keys and required columns.
 
-The multi-source STAGING workflow was executed successfully in the `git-test` development workspace, including all four models and their assertions. At validation time, the staged row counts were 3 Open-Meteo rows, 12 PostgreSQL observations, 6 PostgreSQL stations and 276 S3 historical observations; the PostgreSQL and S3 counts matched the corresponding RAW source checks.
+The multi-source STAGING and CURATED workflows were executed successfully in the `git-test` development workspace. STAGING contained 3 Open-Meteo rows, 12 PostgreSQL observations, 6 PostgreSQL stations and 276 S3 historical observations. CURATED validation returned 10 source-location mappings, 12 PostgreSQL and 276 S3 point observations with no unmapped locations, and 3 Open-Meteo daily rows for Paris across 3 dates.
 
 ## Infrastructure as Code
 
@@ -1773,7 +1800,7 @@ Concurrency
 - [x] Ephemeral / write-only Terraform handling for AWS secret credentials
 - [x] Dataform Git integration
 - [x] STAGING multi-source weather modeling
-- [ ] CURATED multi-source weather modeling
+- [x] CURATED multi-source weather modeling
 - [ ] BigQuery Row-Level Security
 - [ ] BigQuery Column-Level Security / Policy Tags
 - [ ] Data quality hardening
