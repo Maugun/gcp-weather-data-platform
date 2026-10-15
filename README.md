@@ -752,9 +752,119 @@ The `dataform-runner` Service Account receives a second row access policy with `
 
 Each SQLX table definition calls the shared helper in `includes/row_access_policies.js` from `post_operations`. Dataform includes are JavaScript modules, so the helper renders the shared SQL for the target table instead of textually including a SQLX block. It generates both row access policies and the table-level Data Viewer grant, avoiding four copies of the same SQL. The project ID comes from `dataform.projectConfig.defaultDatabase`, which is set by `defaultProject` in `workflow_settings.yaml`; the same setting is used by the RAW declarations. The two Service Account IDs and the France location prefix are centralized as constants in the helper. This avoids duplicating them in each model while keeping the Dataform configuration independent from Terraform's configuration. Dataform replaces these table models during workflow runs, and BigQuery table replacement drops row access policies, so the post-operations reapply them after every run.
 
-To test the filtered identity without creating a long-lived key, temporarily grant your own Google identity `roles/iam.serviceAccountTokenCreator` on `weather-fr-analyst`, then use `gcloud config set auth/impersonate_service_account` and the `bq` CLI. Remove the temporary impersonation binding and unset the gcloud property after the test. Direct queries by principals not listed in a row access policy won't have access to the protected tables; only add an operator to the `TRUE` policy if that principal is intentionally allowed to see all rows.
+#### Test the analyst identity with the CLI
 
-The Terraform and Dataform definitions are prepared, but this chapter remains incomplete in the roadmap until Terraform is applied and the Dataform workflow and impersonated analyst queries are validated.
+Use Cloud Shell, Bash, or PowerShell with the Google Cloud CLI installed. This test impersonates the analyst Service Account without creating or downloading a key. The project Owner role does not itself grant `iam.serviceAccounts.getAccessToken`; the caller needs `roles/iam.serviceAccountTokenCreator` on the target Service Account.
+
+Check the Google Account currently authenticated in gcloud:
+
+```bash
+gcloud auth list --filter=status:ACTIVE --format="value(account)"
+```
+
+Temporarily grant that Google Account permission to impersonate the analyst. Replace the placeholder with the account shown above; do not commit a personal email address in this README or in project configuration:
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding \
+  weather-fr-analyst@de-gcp-lab.iam.gserviceaccount.com \
+  --project=de-gcp-lab \
+  --member="user:YOUR_GOOGLE_ACCOUNT_EMAIL" \
+  --role="roles/iam.serviceAccountTokenCreator"
+```
+
+Set impersonation in the active gcloud configuration. Subsequent `bq` commands use the analyst Service Account:
+
+```bash
+gcloud config set auth/impersonate_service_account \
+  weather-fr-analyst@de-gcp-lab.iam.gserviceaccount.com
+
+bq query --project_id=de-gcp-lab --location=EU --use_legacy_sql=false \
+  "SELECT SESSION_USER() AS principal"
+```
+
+Confirm that `principal` is `weather-fr-analyst@de-gcp-lab.iam.gserviceaccount.com`, then check the visible rows in all four protected tables. Use the query form matching your shell.
+
+**Bash / Cloud Shell:**
+
+```bash
+query=$(cat <<'SQL'
+SELECT 'dim_weather_location' AS table_name,
+       COUNT(*) AS visible_rows,
+       COUNTIF(location_id IS NULL OR NOT STARTS_WITH(location_id, 'FR-')) AS non_fr_rows
+FROM `de-gcp-lab.weather_curated.dim_weather_location`
+UNION ALL
+SELECT 'bridge_weather_source_location',
+       COUNT(*),
+       COUNTIF(location_id IS NULL OR NOT STARTS_WITH(location_id, 'FR-'))
+FROM `de-gcp-lab.weather_curated.bridge_weather_source_location`
+UNION ALL
+SELECT 'fct_weather_observation',
+       COUNT(*),
+       COUNTIF(location_id IS NULL OR NOT STARTS_WITH(location_id, 'FR-'))
+FROM `de-gcp-lab.weather_curated.fct_weather_observation`
+UNION ALL
+SELECT 'fct_weather_daily_open_meteo',
+       COUNT(*),
+       COUNTIF(location_id IS NULL OR NOT STARTS_WITH(location_id, 'FR-'))
+FROM `de-gcp-lab.weather_curated.fct_weather_daily_open_meteo`
+SQL
+)
+
+bq query --project_id=de-gcp-lab --location=EU --use_legacy_sql=false "$query"
+```
+
+**PowerShell:**
+
+```powershell
+$query = @'
+SELECT 'dim_weather_location' AS table_name,
+       COUNT(*) AS visible_rows,
+       COUNTIF(location_id IS NULL OR NOT STARTS_WITH(location_id, 'FR-')) AS non_fr_rows
+FROM `de-gcp-lab.weather_curated.dim_weather_location`
+UNION ALL
+SELECT 'bridge_weather_source_location',
+       COUNT(*),
+       COUNTIF(location_id IS NULL OR NOT STARTS_WITH(location_id, 'FR-'))
+FROM `de-gcp-lab.weather_curated.bridge_weather_source_location`
+UNION ALL
+SELECT 'fct_weather_observation',
+       COUNT(*),
+       COUNTIF(location_id IS NULL OR NOT STARTS_WITH(location_id, 'FR-'))
+FROM `de-gcp-lab.weather_curated.fct_weather_observation`
+UNION ALL
+SELECT 'fct_weather_daily_open_meteo',
+       COUNT(*),
+       COUNTIF(location_id IS NULL OR NOT STARTS_WITH(location_id, 'FR-'))
+FROM `de-gcp-lab.weather_curated.fct_weather_daily_open_meteo`
+'@
+
+bq query --project_id=de-gcp-lab --location=EU --use_legacy_sql=false $query
+```
+
+Each table should have visible rows and `non_fr_rows = 0`. To stop impersonating and remove the temporary grant, first unset the gcloud property, then remove the binding. Replace the placeholder with the same Google Account used above:
+
+```bash
+gcloud config unset auth/impersonate_service_account
+
+gcloud iam service-accounts remove-iam-policy-binding \
+  weather-fr-analyst@de-gcp-lab.iam.gserviceaccount.com \
+  --project=de-gcp-lab \
+  --member="user:YOUR_GOOGLE_ACCOUNT_EMAIL" \
+  --role="roles/iam.serviceAccountTokenCreator"
+```
+
+Only remove the binding if you added it for this test. Direct queries by principals not listed in a row access policy won't have access to the protected tables; only add an operator to the `TRUE` policy if that principal is intentionally allowed to see all rows.
+
+The Terraform changes were applied and the Git-integrated Dataform workflow completed successfully. A query run as `weather-fr-analyst` returned the following visible row counts, with zero rows outside France in every table:
+
+| CURATED table | Visible rows | Non-France rows |
+| --- | ---: | ---: |
+| `dim_weather_location` | 2 | 0 |
+| `bridge_weather_source_location` | 5 | 0 |
+| `fct_weather_observation` | 188 | 0 |
+| `fct_weather_daily_open_meteo` | 3 | 0 |
+
+This validates that the analyst can query the four explicitly granted tables and only sees French locations. Remove the temporary Service Account Token Creator binding after local impersonation testing.
 
 ## Infrastructure as Code
 
@@ -1845,7 +1955,7 @@ Concurrency
 - [x] Dataform Git integration
 - [x] STAGING multi-source weather modeling
 - [x] CURATED multi-source weather modeling
-- [ ] BigQuery Row-Level Security
+- [x] BigQuery Row-Level Security
 - [ ] BigQuery Column-Level Security / Policy Tags
 - [ ] Data quality hardening
 - [ ] Monitoring and alerting
