@@ -5,6 +5,7 @@ locals {
     "weather-api"          = "Weather API"
     "weather-api-gateway"  = "Weather API Gateway"
     "bigquery-s3-transfer" = "BigQuery S3 Transfer"
+    "weather-fr-analyst"   = "Weather France Analyst (RLS test)"
   }
 }
 

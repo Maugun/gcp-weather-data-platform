@@ -684,6 +684,7 @@ The Dataform project contains:
 ```text
 transformation/dataform/
 ├── workflow_settings.yaml
+├── includes/               # shared JavaScript helpers for Dataform actions
 └── definitions/
     ├── sources/             # RAW declarations
     ├── staging/             # source-specific STAGING models
@@ -734,6 +735,27 @@ The multi-source PostgreSQL and S3 STAGING models are full table models over the
 
 The multi-source STAGING and CURATED workflows were executed successfully in the `git-test` development workspace. STAGING contained 3 Open-Meteo rows, 12 PostgreSQL observations, 6 PostgreSQL stations and 276 S3 historical observations. CURATED validation returned 10 source-location mappings, 12 PostgreSQL and 276 S3 point observations with no unmapped locations, and 3 Open-Meteo daily rows for Paris across 3 dates.
 
+### BigQuery Row-Level Security
+
+The RLS exercise restricts the four current CURATED tables that contain `location_id` to French locations for a dedicated test identity:
+
+```text
+dim_weather_location
+bridge_weather_source_location
+fct_weather_observation
+fct_weather_daily_open_meteo
+```
+
+The `weather-fr-analyst` Service Account receives the project-level BigQuery Job User role. On each of the four tables, Dataform first creates a row access policy with the filter `location_id LIKE 'FR-%'`, then grants BigQuery Data Viewer on that table only. BigQuery grants the filtered-data permission through the row access policy; the system-managed `roles/bigquery.filteredDataViewer` role is not assigned directly through Terraform IAM. Table-level access means a future CURATED table is not automatically visible to the analyst.
+
+The `dataform-runner` Service Account receives a second row access policy with `FILTER USING (TRUE)` so Dataform retains full access to maintain its tables. Its existing BigQuery Job User and dataset Data Editor roles provide the other permissions required by the transformation workflow. A small project custom role adds the row-policy creation/update and table IAM permissions needed to manage these table-level grants, and is bound to Dataform on the `weather_curated` dataset.
+
+Each SQLX table definition calls the shared helper in `includes/row_access_policies.js` from `post_operations`. Dataform includes are JavaScript modules, so the helper renders the shared SQL for the target table instead of textually including a SQLX block. It generates both row access policies and the table-level Data Viewer grant, avoiding four copies of the same SQL. The project ID comes from `dataform.projectConfig.defaultDatabase`, which is set by `defaultProject` in `workflow_settings.yaml`; the same setting is used by the RAW declarations. The two Service Account IDs and the France location prefix are centralized as constants in the helper. This avoids duplicating them in each model while keeping the Dataform configuration independent from Terraform's configuration. Dataform replaces these table models during workflow runs, and BigQuery table replacement drops row access policies, so the post-operations reapply them after every run.
+
+To test the filtered identity without creating a long-lived key, temporarily grant your own Google identity `roles/iam.serviceAccountTokenCreator` on `weather-fr-analyst`, then use `gcloud config set auth/impersonate_service_account` and the `bq` CLI. Remove the temporary impersonation binding and unset the gcloud property after the test. Direct queries by principals not listed in a row access policy won't have access to the protected tables; only add an operator to the `TRUE` policy if that principal is intentionally allowed to see all rows.
+
+The Terraform and Dataform definitions are prepared, but this chapter remains incomplete in the roadmap until Terraform is applied and the Dataform workflow and impersonated analyst queries are validated.
+
 ## Infrastructure as Code
 
 Terraform manages the GCP infrastructure.
@@ -756,6 +778,7 @@ Currently managed resources include:
 - BigQuery historical S3 destination table
 - BigQuery Amazon S3 Data Transfer configuration
 - dedicated BigQuery S3 transfer Service Account
+- BigQuery row access policy custom role and France analyst test Service Account
 - AWS S3 secret metadata and scoped Secret Manager IAM
 - Dataform repository
 - GitHub Workload Identity Federation
@@ -920,7 +943,13 @@ weather_staging
 
 dataform_assertions
 └── BigQuery Data Editor
+
+weather_curated
+├── BigQuery Data Editor
+└── BigQuery Curated Governance Manager (custom role)
 ```
+
+The custom role contains only the BigQuery row access policy create, update and policy-binding permissions plus table IAM binding permission needed by the SQLX `post_operations`. The `dataform-runner` is explicitly granted full row access by a `TRUE` policy on each CURATED table so its workflow can maintain the data.
 
 The Dataform Service Agent is allowed to impersonate the dedicated:
 
@@ -929,6 +958,21 @@ dataform-runner
 ```
 
 Service Account.
+
+### France Analyst RLS Test Identity
+
+The `weather-fr-analyst` Service Account is dedicated to validating filtered access. It has:
+
+```text
+Project
+└── BigQuery Job User
+
+Each current CURATED table with location_id
+├── BigQuery Data Viewer, granted by Dataform on that table only
+└── Row access policy: location_id LIKE 'FR-%'
+```
+
+It receives no write permissions. The filtered-data permission is granted automatically by BigQuery through the row access policies. To impersonate this test identity locally, the operator temporarily grants their own authenticated user `roles/iam.serviceAccountTokenCreator` on the Service Account; no service-account key is created or stored.
 
 ### Open-Meteo Runtime Identity
 

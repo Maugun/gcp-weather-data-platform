@@ -20,3 +20,7 @@ FROM UNNEST([
   STRUCT("JP-TOKYO" AS location_id, "Tokyo" AS city_name, "JP" AS country_code, "city" AS location_level),
   STRUCT("SG-SINGAPORE" AS location_id, "Singapore" AS city_name, "SG" AS country_code, "city" AS location_level)
 ])
+
+post_operations {
+  ${row_access_policies.applyFranceAnalystRowAccess(self(), dataform.projectConfig.defaultDatabase)}
+}

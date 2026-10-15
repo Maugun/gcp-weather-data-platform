@@ -28,6 +28,33 @@ resource "google_bigquery_dataset_iam_member" "dataform_curated_editor" {
   member = "serviceAccount:${google_service_account.workloads["dataform-runner"].email}"
 }
 
+resource "google_project_iam_custom_role" "bigquery_curated_governance_manager" {
+  project     = var.project_id
+  role_id     = "bigqueryCuratedGovernanceManager"
+  title       = "BigQuery Curated Governance Manager"
+  description = "Manage row access policies and table-level access for Dataform-managed curated tables."
+  permissions = [
+    "bigquery.rowAccessPolicies.create",
+    "bigquery.rowAccessPolicies.setIamPolicy",
+    "bigquery.rowAccessPolicies.update",
+    "bigquery.tables.setIamPolicy",
+  ]
+}
+
+resource "google_bigquery_dataset_iam_member" "dataform_curated_governance_manager" {
+  project    = var.project_id
+  dataset_id = google_bigquery_dataset.datasets["weather_curated"].dataset_id
+
+  role   = google_project_iam_custom_role.bigquery_curated_governance_manager.name
+  member = "serviceAccount:${google_service_account.workloads["dataform-runner"].email}"
+}
+
+resource "google_project_iam_member" "weather_fr_analyst_job_user" {
+  project = var.project_id
+  role    = "roles/bigquery.jobUser"
+  member  = "serviceAccount:${google_service_account.workloads["weather-fr-analyst"].email}"
+}
+
 resource "google_bigquery_dataset_iam_member" "dataform_assertions_editor" {
   project    = var.project_id
   dataset_id = google_bigquery_dataset.datasets["dataform_assertions"].dataset_id

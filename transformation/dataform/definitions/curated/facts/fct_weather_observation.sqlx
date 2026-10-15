@@ -68,3 +68,7 @@ FROM source_observations
 LEFT JOIN ${ref("bridge_weather_source_location")} AS source_location
   ON source_observations.source_system = source_location.source_system
   AND source_observations.source_location_key = source_location.source_location_key
+
+post_operations {
+  ${row_access_policies.applyFranceAnalystRowAccess(self(), dataform.projectConfig.defaultDatabase)}
+}

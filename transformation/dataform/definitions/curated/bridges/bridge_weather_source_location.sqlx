@@ -76,3 +76,7 @@ FROM source_locations AS source_location
 LEFT JOIN ${ref("dim_weather_location")} AS weather_location
   ON LOWER(TRIM(source_location.city_name)) = LOWER(weather_location.city_name)
   AND UPPER(TRIM(source_location.country_code)) = weather_location.country_code
+
+post_operations {
+  ${row_access_policies.applyFranceAnalystRowAccess(self(), dataform.projectConfig.defaultDatabase)}
+}
