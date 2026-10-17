@@ -3,3 +3,5 @@ defaultDataset: weather_staging
 defaultLocation: EU
 defaultAssertionDataset: dataform_assertions
 dataformCoreVersion: "3.0.62"
+vars:
+  operatorEmailPolicyTag: "projects/de-gcp-lab/locations/eu/taxonomies/5824001559807323102/policyTags/611572664889732993"

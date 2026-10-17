@@ -1,0 +1,34 @@
+config {
+  type: "table",
+  schema: "weather_curated",
+  name: "dim_weather_station_contact",
+  tags: ["weather", "curated", "security"],
+
+  columns: {
+    operator_email: {
+      description: "Synthetic station operator contact classified as restricted PII.",
+      bigqueryPolicyTags: [dataform.projectConfig.vars.operatorEmailPolicyTag]
+    }
+  },
+
+  assertions: {
+    uniqueKey: ["station_id"],
+    nonNull: ["station_id", "station_name", "location_id"]
+  }
+}
+
+-- Grain: one PostgreSQL weather station. Contact data is isolated from
+-- the general-purpose analytical models and protected at the column level.
+SELECT
+  station.station_id,
+  station.station_name,
+  source_location.location_id,
+  station.operator_email
+FROM ${ref("stg_postgres_weather_stations")} AS station
+INNER JOIN ${ref("bridge_weather_source_location")} AS source_location
+  ON source_location.source_system = "postgresql_datastream"
+  AND source_location.source_location_key = station.station_id
+
+post_operations {
+  ${row_access_policies.applyFranceAnalystRowAccess(self(), dataform.projectConfig.defaultDatabase)}
+}

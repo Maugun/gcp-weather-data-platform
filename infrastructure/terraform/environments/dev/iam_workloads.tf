@@ -73,12 +73,13 @@ resource "google_project_iam_custom_role" "bigquery_curated_governance_manager" 
   project     = var.project_id
   role_id     = "bigqueryCuratedGovernanceManager"
   title       = "BigQuery Curated Governance Manager"
-  description = "Manage row access policies and table-level access for Dataform-managed curated tables."
+  description = "Manage row access policies, table-level access, and column classifications for Dataform-managed curated tables."
   permissions = [
     "bigquery.rowAccessPolicies.create",
     "bigquery.rowAccessPolicies.setIamPolicy",
     "bigquery.rowAccessPolicies.update",
     "bigquery.tables.setIamPolicy",
+    "bigquery.tables.setCategory",
   ]
 }
 

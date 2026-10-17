@@ -27,3 +27,8 @@ output "weather_api_image_tag" {
   description = "Docker image tag currently deployed for the Weather API."
   value       = var.weather_api_image_tag
 }
+
+output "operator_email_policy_tag_name" {
+  description = "Full BigQuery policy tag resource name for the protected operator email column."
+  value       = google_data_catalog_policy_tag.operator_email.name
+}

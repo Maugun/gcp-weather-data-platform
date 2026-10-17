@@ -6,6 +6,7 @@ locals {
     "roles/bigquery.metadataViewer",
     "roles/bigquery.user",
     "roles/dataform.viewer",
+    "roles/datacatalog.viewer",
     "roles/datastream.viewer",
     "roles/developerconnect.viewer",
     "roles/iam.securityReviewer",
