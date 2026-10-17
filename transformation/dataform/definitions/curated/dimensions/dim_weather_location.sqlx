@@ -22,5 +22,10 @@ FROM UNNEST([
 ])
 
 post_operations {
-  ${row_access_policies.applyFranceAnalystRowAccess(self(), dataform.projectConfig.defaultDatabase)}
+  ${row_access_policies.applyWeatherRowAccess(
+    self(),
+    dataform.projectConfig.defaultDatabase,
+    dataform.projectConfig.vars.weatherAllRowsReadersGroupEmail,
+    dataform.projectConfig.vars.weatherFrRowsReadersGroupEmail
+  )}
 }

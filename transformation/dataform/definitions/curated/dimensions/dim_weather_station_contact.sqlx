@@ -30,5 +30,10 @@ INNER JOIN ${ref("bridge_weather_source_location")} AS source_location
   AND source_location.source_location_key = station.station_id
 
 post_operations {
-  ${row_access_policies.applyFranceAnalystRowAccess(self(), dataform.projectConfig.defaultDatabase)}
+  ${row_access_policies.applyWeatherRowAccess(
+    self(),
+    dataform.projectConfig.defaultDatabase,
+    dataform.projectConfig.vars.weatherAllRowsReadersGroupEmail,
+    dataform.projectConfig.vars.weatherFrRowsReadersGroupEmail
+  )}
 }

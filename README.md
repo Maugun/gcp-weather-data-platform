@@ -754,11 +754,23 @@ fct_weather_observation
 fct_weather_daily_open_meteo
 ```
 
-The `weather-fr-analyst` Service Account receives the project-level BigQuery Job User role. On each of the five tables, Dataform first creates a row access policy with the filter `location_id LIKE 'FR-%'`, then grants BigQuery Data Viewer on that table only. BigQuery grants the filtered-data permission through the row access policy; the system-managed `roles/bigquery.filteredDataViewer` role is not assigned directly through Terraform IAM. Table-level access means a future CURATED table is not automatically visible to the analyst.
+Human access is managed through three Google Groups, which are created and maintained in Google Groups rather than Terraform:
 
-The `dataform-runner` Service Account receives a second row access policy with `FILTER USING (TRUE)` so Dataform retains full access to maintain its tables. Its existing BigQuery Job User and dataset Data Editor roles provide the other permissions required by the transformation workflow. A small project custom role adds the row-policy creation/update and table IAM permissions needed to manage these table-level grants, and is bound to Dataform on the `weather_curated` dataset.
+| Group | Access purpose |
+| --- | --- |
+| `weather-all-rows-readers@googlegroups.com` | Read all rows in the current CURATED tables. |
+| `weather-fr-rows-readers@googlegroups.com` | Read only rows whose `location_id` starts with `FR-`. |
+| `weather-operator-email-readers@googlegroups.com` | Read the `operator_email` column protected by the `Operator Contact` policy tag. Members also need membership in a row-reader group and table access to query the data. |
 
-Each SQLX table definition calls the shared helper in `includes/row_access_policies.js` from `post_operations`. Dataform includes are JavaScript modules, so the helper renders the shared SQL for the target table instead of textually including a SQLX block. It generates both row access policies and the table-level Data Viewer grant, avoiding five copies of the same SQL. The project ID comes from `dataform.projectConfig.defaultDatabase`, which is set by `defaultProject` in `workflow_settings.yaml`; the same setting is used by the RAW declarations. The two Service Account IDs and the France location prefix are centralized as constants in the helper. This avoids duplicating them in each model while keeping the Dataform configuration independent from Terraform's configuration. Dataform replaces these table models during workflow runs, and BigQuery table replacement drops row access policies, so the post-operations reapply them after every run.
+The first two groups receive project-level BigQuery Job User and table-level BigQuery Data Viewer access on the five current tables. Dataform grants table access only to these models, so a future CURATED table is not automatically visible. BigQuery grants the filtered-data permission through each row access policy; the system-managed `roles/bigquery.filteredDataViewer` role is not assigned directly through Terraform IAM. A member of both row-reader groups gets the union of their policies, so membership in the all-rows group gives full row access.
+
+The intended analyst profile is membership in both `weather-fr-rows-readers` and `weather-operator-email-readers`, but not `weather-all-rows-readers`. The project owner is a member of all three groups and therefore has full row and column access. Group membership is managed manually in Google Groups; Terraform manages the IAM bindings for those group principals.
+
+For the current test setup, the project owner's Google Account belongs to all three groups, and the `weather-fr-analyst` Service Account belongs only to `weather-fr-rows-readers`. No other analyst members have been added, and `dataform-runner` is not a member of these reader groups. The test Service Account's query-job permission, table access, and France-only row filter come from the France reader group. It should see French rows and receive an access error when it selects `operator_email`.
+
+The `dataform-runner` Service Account receives its own row access policy with `FILTER USING (TRUE)` so Dataform retains full access to maintain its tables. It keeps its existing BigQuery Job User and dataset Data Editor roles and does not need membership in any reader group: the policy tag protects only the CURATED output, while Dataform reads the untagged STAGING source. A small project custom role adds the row-policy creation/update and table IAM permissions needed to manage these table-level grants, and is bound to Dataform on the `weather_curated` dataset.
+
+Each SQLX table definition calls the shared helper in `includes/row_access_policies.js` from `post_operations`. Dataform includes are JavaScript modules, so the helper renders the shared SQL for the target table instead of textually including a SQLX block. It creates row policies for the all-rows group, the France-only group, and the Dataform runner, then grants table-level Data Viewer to both reader groups. The test Service Account receives its France access through membership in the France group rather than an individual policy. The group email values are centralized in `workflow_settings.yaml`; the corresponding Terraform group bindings are centralized in `iam_workloads.tf`. The project ID comes from `dataform.projectConfig.defaultDatabase`, which is set by `defaultProject` in `workflow_settings.yaml`. Dataform replaces these table models during workflow runs, and BigQuery table replacement drops row access policies, so the post-operations reapply them after every run.
 
 #### Test the analyst identity with the CLI
 
@@ -871,9 +883,9 @@ gcloud iam service-accounts remove-iam-policy-binding \
   --role="roles/iam.serviceAccountTokenCreator"
 ```
 
-Only remove the binding if you added it for this test. Direct queries by principals not listed in a row access policy won't have access to the protected tables; only add an operator to the `TRUE` policy if that principal is intentionally allowed to see all rows.
+Only remove the binding if you added it for this test. The all-rows group is intentionally granted a `TRUE` policy; do not add a restricted analyst to that group. BigQuery combines the rows granted by multiple policies, so an analyst in both row-reader groups will see all rows.
 
-The Terraform changes were applied and the Git-integrated Dataform workflow completed successfully. A query run as `weather-fr-analyst` returned the following visible row counts, with zero rows outside France in every table:
+During the initial France-only RLS validation, a query run as `weather-fr-analyst` returned the following visible row counts, with zero rows outside France in every table:
 
 | CURATED table | Visible rows | Non-France rows |
 | --- | ---: | ---: |
@@ -883,13 +895,13 @@ The Terraform changes were applied and the Git-integrated Dataform workflow comp
 | `fct_weather_observation` | 188 | 0 |
 | `fct_weather_daily_open_meteo` | 3 | 0 |
 
-This validates that the analyst can query the five explicitly granted tables and only sees French locations. Remove the temporary Service Account Token Creator binding after local impersonation testing.
+This validates the France-only row filter on the five CURATED tables. The table-level grants and row access policies are recreated by Dataform post-operations, so publish the updated Dataform subtree and run the Git-integrated workflow after changing group-based access. Then repeat this test to verify that the group-based configuration gives the same results. Remove the temporary Service Account Token Creator binding after local impersonation testing.
 
 ### BigQuery Column-Level Security with Policy Tags
 
 Column-Level Security protects `operator_email` in the dedicated `weather_curated.dim_weather_station_contact` table. General-purpose weather dimensions and facts do not expose this contact field. The contact values in this portfolio dataset are synthetic.
 
-Terraform manages the Data Catalog taxonomy `Weather Data Classification`, the `Operator Contact` policy tag, and the associated IAM grants. The `dataform-runner` can read taxonomy metadata and has the BigQuery permission to apply the column classification. The `weather-fr-analyst` Service Account receives `roles/datacatalog.categoryFineGrainedReader` on this policy tag only.
+Terraform manages the Data Catalog taxonomy `Weather Data Classification`, the `Operator Contact` policy tag, and its IAM binding. The `dataform-runner` can read taxonomy metadata and has the BigQuery permission to apply the column classification. The `weather-operator-email-readers@googlegroups.com` group receives `roles/datacatalog.categoryFineGrainedReader` on the policy tag. The `weather-fr-analyst` test Service Account receives no policy-tag access.
 
 Dataform declares the full policy tag resource name in `workflow_settings.yaml` as the `operatorEmailPolicyTag` project variable. The `dim_weather_station_contact` SQLX model assigns that variable to the `operator_email` column through `bigqueryPolicyTags`. Terraform exposes the current full tag name as:
 
@@ -901,7 +913,7 @@ If the taxonomy or policy tag is recreated, update the Dataform variable with th
 
 #### Verify the policy tag with the CLI
 
-The RLS CLI section above describes how to grant temporary impersonation access to the analyst Service Account and how to remove it. With impersonation unset, query the protected field as the normal authenticated CLI identity:
+The account that owns the groups is a member of all three, so it is expected to read the protected column. Use the `weather-fr-analyst` test Service Account to verify the denied path. The RLS CLI section above describes how to grant temporary impersonation access to that Service Account and how to remove it.
 
 ```bash
 gcloud config unset auth/impersonate_service_account
@@ -912,9 +924,7 @@ bq query --project_id=de-gcp-lab --location=EU --use_legacy_sql=false \
    LIMIT 1'
 ```
 
-This query should fail with a fine-grained access error for the `Operator Contact` policy tag. A query that selects only untagged fields can still succeed if that identity has table access.
-
-Now configure impersonation as described in the RLS section and query the tagged field as the analyst:
+Run the query above as the normal account to confirm that a member of the operator-email group can read the column. It should succeed for the account that owns the groups.
 
 ```bash
 gcloud config set auth/impersonate_service_account \
@@ -929,9 +939,9 @@ bq query --project_id=de-gcp-lab --location=EU --use_legacy_sql=false \
    ORDER BY station_id'
 ```
 
-The expected result is two rows (`LYON_001` and `PARIS_001`), both with `FR-` location IDs and visible email values. `SESSION_USER()` should identify `weather-fr-analyst`. This query demonstrates that the policy-tag reader can access the classified column while the table's row access policy limits the results to French stations. When finished, unset impersonation and remove the temporary Token Creator binding as documented in the RLS test instructions.
+The query selecting `operator_email` should fail with a fine-grained access error for the `Operator Contact` policy tag. A query that selects only untagged fields should still return the two French station rows. This verifies that the Service Account's RLS access is independent from CLS. When finished, unset impersonation and remove the temporary Token Creator binding as documented in the RLS test instructions.
 
-The Git-integrated Dataform workflow completed successfully after the policy tag was added. The analyst query returned the two French station contacts. Querying `operator_email` as the normal CLI identity was denied as expected, confirming the column-level restriction.
+Terraform now grants the policy-tag reader role to `weather-operator-email-readers`. After publishing the updated Dataform subtree and running its workflow, members of that group who also have row-reader and table access can read the contact column, while the France test identity remains denied.
 
 ## Infrastructure as Code
 
@@ -1138,18 +1148,14 @@ Service Account.
 
 ### France Analyst RLS Test Identity
 
-The `weather-fr-analyst` Service Account is dedicated to validating filtered access. It has:
+The `weather-fr-analyst` Service Account is dedicated to validating filtered access. It is a member of the France row-reader group only; the group's Terraform and Dataform grants provide:
 
 ```text
-Project
-└── BigQuery Job User
-
-Each current CURATED table with location_id
-├── BigQuery Data Viewer, granted by Dataform on that table only
-└── Row access policy: location_id LIKE 'FR-%'
+Project: BigQuery Job User
+Each current CURATED table: BigQuery Data Viewer and row access policy location_id LIKE 'FR-%'
 ```
 
-It receives no write permissions. The filtered-data permission is granted automatically by BigQuery through the row access policies. To impersonate this test identity locally, the operator temporarily grants their own authenticated user `roles/iam.serviceAccountTokenCreator` on the Service Account; no service-account key is created or stored.
+It receives no write permissions and no `operator_email` policy-tag access. The filtered-data permission is granted automatically by BigQuery through the row access policies. To impersonate this test identity locally, the operator temporarily grants their own authenticated user `roles/iam.serviceAccountTokenCreator` on the Service Account; no service-account key is created or stored.
 
 ### Open-Meteo Runtime Identity
 

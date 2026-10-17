@@ -29,8 +29,8 @@ resource "google_data_catalog_taxonomy_iam_member" "dataform_runner_taxonomy_rea
   member   = "serviceAccount:${google_service_account.workloads["dataform-runner"].email}"
 }
 
-resource "google_data_catalog_policy_tag_iam_member" "weather_fr_analyst_operator_contact_reader" {
+resource "google_data_catalog_policy_tag_iam_member" "weather_operator_email_group_reader" {
   policy_tag = google_data_catalog_policy_tag.operator_email.name
   role       = "roles/datacatalog.categoryFineGrainedReader"
-  member     = "serviceAccount:${google_service_account.workloads["weather-fr-analyst"].email}"
+  member     = "group:${local.weather_data_access_groups.operator_email_readers}"
 }

@@ -1,4 +1,10 @@
 locals {
+  weather_data_access_groups = {
+    all_rows_readers       = "weather-all-rows-readers@googlegroups.com"
+    fr_rows_readers        = "weather-fr-rows-readers@googlegroups.com"
+    operator_email_readers = "weather-operator-email-readers@googlegroups.com"
+  }
+
   bigquery_dataset_iam_grants = {
     dataform_raw_viewer = {
       dataset_key         = "weather_raw"
@@ -37,10 +43,6 @@ locals {
       role                = "roles/bigquery.jobUser"
       workload_account_id = "dataform-runner"
     }
-    weather_fr_analyst_job_user = {
-      role                = "roles/bigquery.jobUser"
-      workload_account_id = "weather-fr-analyst"
-    }
     weather_api_cloud_sql_client = {
       role                = "roles/cloudsql.client"
       workload_account_id = "weather-api"
@@ -48,6 +50,17 @@ locals {
     bigquery_s3_transfer_job_user = {
       role                = "roles/bigquery.jobUser"
       workload_account_id = "bigquery-s3-transfer"
+    }
+  }
+
+  project_group_iam_grants = {
+    weather_all_rows_readers_job_user = {
+      role      = "roles/bigquery.jobUser"
+      group_key = "all_rows_readers"
+    }
+    weather_fr_rows_readers_job_user = {
+      role      = "roles/bigquery.jobUser"
+      group_key = "fr_rows_readers"
     }
   }
 }
@@ -67,6 +80,14 @@ resource "google_project_iam_member" "workload_project_grants" {
   project = var.project_id
   role    = each.value.role
   member  = "serviceAccount:${google_service_account.workloads[each.value.workload_account_id].email}"
+}
+
+resource "google_project_iam_member" "reader_group_project_grants" {
+  for_each = local.project_group_iam_grants
+
+  project = var.project_id
+  role    = each.value.role
+  member  = "group:${local.weather_data_access_groups[each.value.group_key]}"
 }
 
 resource "google_project_iam_custom_role" "bigquery_curated_governance_manager" {

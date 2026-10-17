@@ -59,5 +59,10 @@ LEFT JOIN ${ref("bridge_weather_source_location")} AS source_location
   AND daily_weather.source_location_key = source_location.source_location_key
 
 post_operations {
-  ${row_access_policies.applyFranceAnalystRowAccess(self(), dataform.projectConfig.defaultDatabase)}
+  ${row_access_policies.applyWeatherRowAccess(
+    self(),
+    dataform.projectConfig.defaultDatabase,
+    dataform.projectConfig.vars.weatherAllRowsReadersGroupEmail,
+    dataform.projectConfig.vars.weatherFrRowsReadersGroupEmail
+  )}
 }

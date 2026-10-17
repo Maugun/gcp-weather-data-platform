@@ -40,6 +40,12 @@ moved {
   to   = google_project_iam_member.workload_project_grants["weather_fr_analyst_job_user"]
 }
 
+# The France test identity now receives BigQuery Job User through its reader group.
+moved {
+  from = google_project_iam_member.workload_project_grants["weather_fr_analyst_job_user"]
+  to   = google_project_iam_member.reader_group_project_grants["weather_fr_rows_readers_job_user"]
+}
+
 moved {
   from = google_project_iam_member.weather_api_cloud_sql_client
   to   = google_project_iam_member.workload_project_grants["weather_api_cloud_sql_client"]
@@ -112,6 +118,12 @@ moved {
 moved {
   from = google_service_account_iam_member.dataform_service_agent_token_creator
   to   = google_service_account_iam_member.dataform_runner_grants["dataform_service_agent_token_creator"]
+}
+
+# The operator-contact policy-tag grant is now assigned to the reader group.
+moved {
+  from = google_data_catalog_policy_tag_iam_member.weather_fr_analyst_operator_contact_reader
+  to   = google_data_catalog_policy_tag_iam_member.weather_operator_email_group_reader
 }
 
 # Weather API service IAM grants now share a for_each resource.

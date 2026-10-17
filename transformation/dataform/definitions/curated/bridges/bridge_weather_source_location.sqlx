@@ -78,5 +78,10 @@ LEFT JOIN ${ref("dim_weather_location")} AS weather_location
   AND UPPER(TRIM(source_location.country_code)) = weather_location.country_code
 
 post_operations {
-  ${row_access_policies.applyFranceAnalystRowAccess(self(), dataform.projectConfig.defaultDatabase)}
+  ${row_access_policies.applyWeatherRowAccess(
+    self(),
+    dataform.projectConfig.defaultDatabase,
+    dataform.projectConfig.vars.weatherAllRowsReadersGroupEmail,
+    dataform.projectConfig.vars.weatherFrRowsReadersGroupEmail
+  )}
 }
