@@ -885,7 +885,7 @@ gcloud iam service-accounts remove-iam-policy-binding \
 
 Only remove the binding if you added it for this test. The all-rows group is intentionally granted a `TRUE` policy; do not add a restricted analyst to that group. BigQuery combines the rows granted by multiple policies, so an analyst in both row-reader groups will see all rows.
 
-During the initial France-only RLS validation, a query run as `weather-fr-analyst` returned the following visible row counts, with zero rows outside France in every table:
+After publishing the group-based access changes and successfully running the Git-integrated Dataform workflow, a query run as `weather-fr-analyst` returned the following visible row counts, with zero rows outside France in every table:
 
 | CURATED table | Visible rows | Non-France rows |
 | --- | ---: | ---: |
@@ -895,7 +895,7 @@ During the initial France-only RLS validation, a query run as `weather-fr-analys
 | `fct_weather_observation` | 188 | 0 |
 | `fct_weather_daily_open_meteo` | 3 | 0 |
 
-This validates the France-only row filter on the five CURATED tables. The table-level grants and row access policies are recreated by Dataform post-operations, so publish the updated Dataform subtree and run the Git-integrated workflow after changing group-based access. Then repeat this test to verify that the group-based configuration gives the same results. Remove the temporary Service Account Token Creator binding after local impersonation testing.
+This confirms the France-only row filter and table access granted through `weather-fr-rows-readers`. The table-level grants and row access policies are recreated by Dataform post-operations, so publish the Dataform subtree and run the Git-integrated workflow after future changes to group-based access. Remove the temporary Service Account Token Creator binding after local impersonation testing.
 
 ### BigQuery Column-Level Security with Policy Tags
 
@@ -924,7 +924,7 @@ bq query --project_id=de-gcp-lab --location=EU --use_legacy_sql=false \
    LIMIT 1'
 ```
 
-Run the query above as the normal account to confirm that a member of the operator-email group can read the column. It should succeed for the account that owns the groups.
+Run the query above as the normal account to confirm that a member of the operator-email group can read the column. It succeeded for the project owner's account after the group-based Terraform changes were applied and the Dataform workflow completed.
 
 ```bash
 gcloud config set auth/impersonate_service_account \
@@ -939,9 +939,9 @@ bq query --project_id=de-gcp-lab --location=EU --use_legacy_sql=false \
    ORDER BY station_id'
 ```
 
-The query selecting `operator_email` should fail with a fine-grained access error for the `Operator Contact` policy tag. A query that selects only untagged fields should still return the two French station rows. This verifies that the Service Account's RLS access is independent from CLS. When finished, unset impersonation and remove the temporary Token Creator binding as documented in the RLS test instructions.
+The query selecting `operator_email` failed with a fine-grained access error for the `Operator Contact` policy tag, while a query selecting only untagged fields returned the two French station rows. This confirms that the Service Account's RLS access is independent from CLS. When finished, unset impersonation and remove the temporary Token Creator binding as documented in the RLS test instructions.
 
-Terraform now grants the policy-tag reader role to `weather-operator-email-readers`. After publishing the updated Dataform subtree and running its workflow, members of that group who also have row-reader and table access can read the contact column, while the France test identity remains denied.
+Terraform grants the policy-tag reader role to `weather-operator-email-readers`. The successful owner and analyst tests confirm that members of this group who also have row-reader and table access can read the contact column, while the France test identity remains denied.
 
 ## Infrastructure as Code
 
