@@ -742,6 +742,21 @@ The multi-source PostgreSQL and S3 STAGING models are full table models over the
 
 The multi-source STAGING and CURATED workflows were executed successfully in the `git-test` development workspace. STAGING contained 3 Open-Meteo rows, 12 PostgreSQL observations, 6 PostgreSQL stations and 276 S3 historical observations. CURATED validation returned 10 source-location mappings, 12 PostgreSQL and 276 S3 point observations with no unmapped locations, and 3 Open-Meteo daily rows for Paris across 3 dates.
 
+### Data Quality Hardening
+
+Dataform model-level assertions already enforce configured `uniqueKey` and `nonNull` rules, including the source keys and required mapping fields. The custom `assert_stg_postgres_observations_grain` assertion checks that a station does not have duplicate observations at the same timestamp. These checks run as part of the Dataform workflow and write assertion results to the `dataform_assertions` dataset.
+
+Additional CURATED SQLX assertions return violating rows for two stable measurement-domain invariants:
+
+- `assert_fct_weather_observation_measure_ranges`: humidity is between 0 and 100, and precipitation and wind speed are non-negative when present.
+- `assert_fct_weather_daily_open_meteo_measure_ranges`: daily minimum temperature does not exceed the maximum, the mean stays within the daily range when all values are present, and precipitation, rain and wind speed are non-negative when present.
+
+The bridge model's existing `nonNull` assertion on `location_id` already makes unmapped source locations a blocking failure; the diagnostic profile reports the same condition broken down by source. Weather measurements are nullable in the source schemas, so null counts are reported for investigation but are not blocking until the source data contract declares those fields mandatory.
+
+Temperature min/max ranges are profiled rather than rejected using an arbitrary fixed threshold; unusual weather can be valid and should be investigated before adding a blocking rule. The manually runnable BigQuery profiles are versioned under `quality/diagnostics/`. They summarize point observations, daily Open-Meteo records and location mapping. Their counts are descriptive and are expected to change as the source data grows; missing keys, unmapped locations and invalid measurement counts should remain zero.
+
+To run the automated checks, publish the Dataform subtree, pull it into the Git-integrated Dataform workspace and execute the workflow. Review the assertion actions for failures in the workflow details or in the `dataform_assertions` dataset. To inspect aggregate diagnostics, open and run the SQL files under `quality/diagnostics/` in BigQuery. The diagnostics help investigate data; the Dataform assertions enforce the stable rules in each workflow run.
+
 ### BigQuery Row-Level Security
 
 The RLS exercise restricts the five current CURATED tables that contain `location_id` to French locations for a dedicated test identity:

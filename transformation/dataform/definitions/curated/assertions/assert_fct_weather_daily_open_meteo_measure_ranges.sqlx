@@ -1,0 +1,33 @@
+config {
+  type: "assertion",
+  tags: ["weather", "quality", "curated", "daily", "open_meteo"]
+}
+
+-- Return only daily records with impossible ordering or negative totals/speeds.
+SELECT
+  location_id,
+  observation_date,
+  temperature_2m_min,
+  temperature_2m_mean,
+  temperature_2m_max,
+  precipitation_sum,
+  rain_sum,
+  wind_speed_10m_max
+FROM ${ref("fct_weather_daily_open_meteo")}
+WHERE (
+    temperature_2m_min IS NOT NULL
+    AND temperature_2m_max IS NOT NULL
+    AND temperature_2m_min > temperature_2m_max
+  )
+  OR (
+    temperature_2m_mean IS NOT NULL
+    AND temperature_2m_min IS NOT NULL
+    AND temperature_2m_max IS NOT NULL
+    AND (
+      temperature_2m_mean < temperature_2m_min
+      OR temperature_2m_mean > temperature_2m_max
+    )
+  )
+  OR (precipitation_sum IS NOT NULL AND precipitation_sum < 0)
+  OR (rain_sum IS NOT NULL AND rain_sum < 0)
+  OR (wind_speed_10m_max IS NOT NULL AND wind_speed_10m_max < 0)

@@ -1,0 +1,19 @@
+config {
+  type: "assertion",
+  tags: ["weather", "quality", "curated", "observations"]
+}
+
+-- Return only records that violate stable measurement-domain rules.
+-- Temperature extremes are profiled separately because rare values may be valid.
+SELECT
+  source_system,
+  source_record_id,
+  source_location_key,
+  observed_at,
+  humidity_percent,
+  precipitation_mm,
+  wind_speed_kmh
+FROM ${ref("fct_weather_observation")}
+WHERE (humidity_percent IS NOT NULL AND (humidity_percent < 0 OR humidity_percent > 100))
+  OR (precipitation_mm IS NOT NULL AND precipitation_mm < 0)
+  OR (wind_speed_kmh IS NOT NULL AND wind_speed_kmh < 0)
