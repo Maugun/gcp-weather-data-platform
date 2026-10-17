@@ -757,6 +757,8 @@ Temperature min/max ranges are profiled rather than rejected using an arbitrary 
 
 To run the automated checks, publish the Dataform subtree, pull it into the Git-integrated Dataform workspace and execute the workflow. Review the assertion actions for failures in the workflow details or in the `dataform_assertions` dataset. To inspect aggregate diagnostics, open and run the SQL files under `quality/diagnostics/` in BigQuery. The diagnostics help investigate data; the Dataform assertions enforce the stable rules in each workflow run.
 
+The group-based Dataform workflow completed successfully with the new quality assertions. In the corresponding manual profiles, all missing-key, unmapped-location, invalid-range and negative-measurement counts were zero across 12 PostgreSQL observations, 276 S3 observations, 3 Open-Meteo daily rows and 10 source-location mappings. These counts record the validation run and are not fixed acceptance thresholds.
+
 ### BigQuery Row-Level Security
 
 The RLS exercise restricts the five current CURATED tables that contain `location_id` to French locations for a dedicated test identity:
@@ -2045,6 +2047,6 @@ Concurrency
 - [x] CURATED multi-source weather modeling
 - [x] BigQuery Row-Level Security
 - [x] BigQuery Column-Level Security / Policy Tags
-- [ ] Data quality hardening
+- [x] Data quality hardening
 - [ ] Monitoring and alerting
 - [ ] Production-ready Airflow / Cloud Composer deployment
