@@ -126,6 +126,7 @@ GitHub Actions → WIF → Artifact Registry → Terraform → GCP
 │               ├── datastream.tf
 │               ├── bigquery_tables.tf
 │               ├── bigquery_transfer.tf
+│               ├── bigquery_policy_tags.tf
 │               ├── outputs.tf
 │               ├── terraform.tfvars.example
 │               └── .terraform.lock.hcl
@@ -177,7 +178,8 @@ GitHub Actions → WIF → Artifact Registry → Terraform → GCP
 │           │       └── assert_stg_postgres_observations_grain.sqlx
 │           └── curated/
 │               ├── dimensions/
-│               │   └── dim_weather_location.sqlx
+│               │   ├── dim_weather_location.sqlx
+│               │   └── dim_weather_station_contact.sqlx
 │               ├── bridges/
 │               │   └── bridge_weather_source_location.sqlx
 │               └── facts/
@@ -590,13 +592,14 @@ The multi-source STAGING layer keeps each source-specific model separate:
 - `stg_postgres_weather_observations`: current PostgreSQL observations, retaining `observation_id` and checking the business grain `(station_id, observed_at)`.
 - `stg_s3_historical_weather`: historical S3 observations at `(station_id, observed_at)`.
 
-The PostgreSQL models are rebuilt from the current Datastream BigQuery tables so source-side deletes are reflected in STAGING. Datastream metadata is retained as lineage, while `operator_email` is excluded because it is not needed by the analytical models. The source models remain separate in STAGING; CURATED standardizes compatible point-observation fields while keeping daily Open-Meteo metrics at their native daily grain.
+The PostgreSQL models are rebuilt from the current Datastream BigQuery tables so source-side deletes are reflected in STAGING. Datastream metadata is retained as lineage. `operator_email` is excluded from the general-purpose analytical models; it is retained in a dedicated CURATED contact dimension protected with BigQuery Column-Level Security. The source models remain separate in STAGING; CURATED standardizes compatible point-observation fields while keeping daily Open-Meteo metrics at their native daily grain.
 
 ### CURATED
 
 The curated layer contains data prepared for downstream analytics and business use cases. It currently combines the three sources through a canonical city dimension and a source-location bridge:
 
 - `dim_weather_location`: one row per canonical city, with six locations across France, the United States, Japan and Singapore.
+- `dim_weather_station_contact`: one row per PostgreSQL weather station, including synthetic operator contact details. Access is restricted with a BigQuery policy tag and France-only row access policy.
 - `bridge_weather_source_location`: maps each source identifier to a canonical `location_id`; the current mapping contains 6 PostgreSQL, 3 S3 and 1 Open-Meteo key.
 - `fct_weather_observation`: PostgreSQL and S3 observations at source-record/timestamp grain. PostgreSQL `observation_id` is retained; S3 uses a source record key built from station and timestamp.
 - `fct_weather_daily_open_meteo`: Open-Meteo daily metrics at `(location_id, observation_date)` grain.
@@ -741,20 +744,21 @@ The multi-source STAGING and CURATED workflows were executed successfully in the
 
 ### BigQuery Row-Level Security
 
-The RLS exercise restricts the four current CURATED tables that contain `location_id` to French locations for a dedicated test identity:
+The RLS exercise restricts the five current CURATED tables that contain `location_id` to French locations for a dedicated test identity:
 
 ```text
 dim_weather_location
+dim_weather_station_contact
 bridge_weather_source_location
 fct_weather_observation
 fct_weather_daily_open_meteo
 ```
 
-The `weather-fr-analyst` Service Account receives the project-level BigQuery Job User role. On each of the four tables, Dataform first creates a row access policy with the filter `location_id LIKE 'FR-%'`, then grants BigQuery Data Viewer on that table only. BigQuery grants the filtered-data permission through the row access policy; the system-managed `roles/bigquery.filteredDataViewer` role is not assigned directly through Terraform IAM. Table-level access means a future CURATED table is not automatically visible to the analyst.
+The `weather-fr-analyst` Service Account receives the project-level BigQuery Job User role. On each of the five tables, Dataform first creates a row access policy with the filter `location_id LIKE 'FR-%'`, then grants BigQuery Data Viewer on that table only. BigQuery grants the filtered-data permission through the row access policy; the system-managed `roles/bigquery.filteredDataViewer` role is not assigned directly through Terraform IAM. Table-level access means a future CURATED table is not automatically visible to the analyst.
 
 The `dataform-runner` Service Account receives a second row access policy with `FILTER USING (TRUE)` so Dataform retains full access to maintain its tables. Its existing BigQuery Job User and dataset Data Editor roles provide the other permissions required by the transformation workflow. A small project custom role adds the row-policy creation/update and table IAM permissions needed to manage these table-level grants, and is bound to Dataform on the `weather_curated` dataset.
 
-Each SQLX table definition calls the shared helper in `includes/row_access_policies.js` from `post_operations`. Dataform includes are JavaScript modules, so the helper renders the shared SQL for the target table instead of textually including a SQLX block. It generates both row access policies and the table-level Data Viewer grant, avoiding four copies of the same SQL. The project ID comes from `dataform.projectConfig.defaultDatabase`, which is set by `defaultProject` in `workflow_settings.yaml`; the same setting is used by the RAW declarations. The two Service Account IDs and the France location prefix are centralized as constants in the helper. This avoids duplicating them in each model while keeping the Dataform configuration independent from Terraform's configuration. Dataform replaces these table models during workflow runs, and BigQuery table replacement drops row access policies, so the post-operations reapply them after every run.
+Each SQLX table definition calls the shared helper in `includes/row_access_policies.js` from `post_operations`. Dataform includes are JavaScript modules, so the helper renders the shared SQL for the target table instead of textually including a SQLX block. It generates both row access policies and the table-level Data Viewer grant, avoiding five copies of the same SQL. The project ID comes from `dataform.projectConfig.defaultDatabase`, which is set by `defaultProject` in `workflow_settings.yaml`; the same setting is used by the RAW declarations. The two Service Account IDs and the France location prefix are centralized as constants in the helper. This avoids duplicating them in each model while keeping the Dataform configuration independent from Terraform's configuration. Dataform replaces these table models during workflow runs, and BigQuery table replacement drops row access policies, so the post-operations reapply them after every run.
 
 #### Test the analyst identity with the CLI
 
@@ -786,7 +790,7 @@ bq query --project_id=de-gcp-lab --location=EU --use_legacy_sql=false \
   "SELECT SESSION_USER() AS principal"
 ```
 
-Confirm that `principal` is `weather-fr-analyst@de-gcp-lab.iam.gserviceaccount.com`, then check the visible rows in all four protected tables. Use the query form matching your shell.
+Confirm that `principal` is `weather-fr-analyst@de-gcp-lab.iam.gserviceaccount.com`, then check the visible rows in all five protected tables. Use the query form matching your shell.
 
 **Bash / Cloud Shell:**
 
@@ -796,6 +800,11 @@ SELECT 'dim_weather_location' AS table_name,
        COUNT(*) AS visible_rows,
        COUNTIF(location_id IS NULL OR NOT STARTS_WITH(location_id, 'FR-')) AS non_fr_rows
 FROM `de-gcp-lab.weather_curated.dim_weather_location`
+UNION ALL
+SELECT 'dim_weather_station_contact',
+       COUNT(*),
+       COUNTIF(location_id IS NULL OR NOT STARTS_WITH(location_id, 'FR-'))
+FROM `de-gcp-lab.weather_curated.dim_weather_station_contact`
 UNION ALL
 SELECT 'bridge_weather_source_location',
        COUNT(*),
@@ -825,6 +834,11 @@ SELECT 'dim_weather_location' AS table_name,
        COUNT(*) AS visible_rows,
        COUNTIF(location_id IS NULL OR NOT STARTS_WITH(location_id, 'FR-')) AS non_fr_rows
 FROM `de-gcp-lab.weather_curated.dim_weather_location`
+UNION ALL
+SELECT 'dim_weather_station_contact',
+       COUNT(*),
+       COUNTIF(location_id IS NULL OR NOT STARTS_WITH(location_id, 'FR-'))
+FROM `de-gcp-lab.weather_curated.dim_weather_station_contact`
 UNION ALL
 SELECT 'bridge_weather_source_location',
        COUNT(*),
@@ -864,11 +878,60 @@ The Terraform changes were applied and the Git-integrated Dataform workflow comp
 | CURATED table | Visible rows | Non-France rows |
 | --- | ---: | ---: |
 | `dim_weather_location` | 2 | 0 |
+| `dim_weather_station_contact` | 2 | 0 |
 | `bridge_weather_source_location` | 5 | 0 |
 | `fct_weather_observation` | 188 | 0 |
 | `fct_weather_daily_open_meteo` | 3 | 0 |
 
-This validates that the analyst can query the four explicitly granted tables and only sees French locations. Remove the temporary Service Account Token Creator binding after local impersonation testing.
+This validates that the analyst can query the five explicitly granted tables and only sees French locations. Remove the temporary Service Account Token Creator binding after local impersonation testing.
+
+### BigQuery Column-Level Security with Policy Tags
+
+Column-Level Security protects `operator_email` in the dedicated `weather_curated.dim_weather_station_contact` table. General-purpose weather dimensions and facts do not expose this contact field. The contact values in this portfolio dataset are synthetic.
+
+Terraform manages the Data Catalog taxonomy `Weather Data Classification`, the `Operator Contact` policy tag, and the associated IAM grants. The `dataform-runner` can read taxonomy metadata and has the BigQuery permission to apply the column classification. The `weather-fr-analyst` Service Account receives `roles/datacatalog.categoryFineGrainedReader` on this policy tag only.
+
+Dataform declares the full policy tag resource name in `workflow_settings.yaml` as the `operatorEmailPolicyTag` project variable. The `dim_weather_station_contact` SQLX model assigns that variable to the `operator_email` column through `bigqueryPolicyTags`. Terraform exposes the current full tag name as:
+
+```bash
+terraform output -raw operator_email_policy_tag_name
+```
+
+If the taxonomy or policy tag is recreated, update the Dataform variable with the new output value, publish the Dataform subtree, pull it into the Git-integrated Dataform workspace, and run the workflow again.
+
+#### Verify the policy tag with the CLI
+
+The RLS CLI section above describes how to grant temporary impersonation access to the analyst Service Account and how to remove it. With impersonation unset, query the protected field as the normal authenticated CLI identity:
+
+```bash
+gcloud config unset auth/impersonate_service_account
+
+bq query --project_id=de-gcp-lab --location=EU --use_legacy_sql=false \
+  'SELECT operator_email
+   FROM `de-gcp-lab.weather_curated.dim_weather_station_contact`
+   LIMIT 1'
+```
+
+This query should fail with a fine-grained access error for the `Operator Contact` policy tag. A query that selects only untagged fields can still succeed if that identity has table access.
+
+Now configure impersonation as described in the RLS section and query the tagged field as the analyst:
+
+```bash
+gcloud config set auth/impersonate_service_account \
+  weather-fr-analyst@de-gcp-lab.iam.gserviceaccount.com
+
+bq query --project_id=de-gcp-lab --location=EU --use_legacy_sql=false \
+  'SELECT SESSION_USER() AS principal,
+          station_id,
+          location_id,
+          operator_email
+   FROM `de-gcp-lab.weather_curated.dim_weather_station_contact`
+   ORDER BY station_id'
+```
+
+The expected result is two rows (`LYON_001` and `PARIS_001`), both with `FR-` location IDs and visible email values. `SESSION_USER()` should identify `weather-fr-analyst`. This query demonstrates that the policy-tag reader can access the classified column while the table's row access policy limits the results to French stations. When finished, unset impersonation and remove the temporary Token Creator binding as documented in the RLS test instructions.
+
+The Git-integrated Dataform workflow completed successfully after the policy tag was added. The analyst query returned the two French station contacts. Querying `operator_email` as the normal CLI identity was denied as expected, confirming the column-level restriction.
 
 ## Infrastructure as Code
 
@@ -1960,7 +2023,7 @@ Concurrency
 - [x] STAGING multi-source weather modeling
 - [x] CURATED multi-source weather modeling
 - [x] BigQuery Row-Level Security
-- [ ] BigQuery Column-Level Security / Policy Tags
+- [x] BigQuery Column-Level Security / Policy Tags
 - [ ] Data quality hardening
 - [ ] Monitoring and alerting
 - [ ] Production-ready Airflow / Cloud Composer deployment
