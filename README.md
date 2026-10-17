@@ -113,6 +113,8 @@ GitHub Actions → WIF → Artifact Registry → Terraform → GCP
 │               ├── iam_workloads.tf
 │               ├── iam_github_actions.tf
 │               ├── iam_service_agents.tf
+│               ├── iam_cloud_run.tf
+│               ├── moved.tf
 │               ├── services.tf
 │               ├── cloud_run.tf
 │               ├── dataform.tf
@@ -198,6 +200,8 @@ GitHub Actions → WIF → Artifact Registry → Terraform → GCP
 ├── .gitignore
 └── README.md
 ```
+
+Terraform uses `for_each` maps for repeated resources with the same type and configuration shape. The `moved.tf` file records resource-address migrations so Terraform can update the remote state without recreating those resources; the state itself remains in the GCS backend.
 
 ## Current Data Pipeline
 

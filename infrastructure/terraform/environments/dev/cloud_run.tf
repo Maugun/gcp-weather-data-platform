@@ -96,7 +96,7 @@ resource "google_cloud_run_v2_service" "weather_api" {
 
         value_source {
           secret_key_ref {
-            secret  = google_secret_manager_secret.weather_db_password.secret_id
+            secret  = google_secret_manager_secret.secrets["weather_db_password"].secret_id
             version = "latest"
           }
         }
@@ -125,7 +125,7 @@ resource "google_cloud_run_v2_service" "weather_api" {
   }
 
   depends_on = [
-    google_project_iam_member.weather_api_cloud_sql_client,
+    google_project_iam_member.workload_project_grants["weather_api_cloud_sql_client"],
     google_secret_manager_secret_iam_member.weather_api_secret_accessor,
   ]
 

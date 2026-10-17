@@ -10,7 +10,7 @@ resource "google_datastream_connection_profile" "weather_postgres" {
     username = "datastream"
     database = "postgres"
 
-    secret_manager_stored_password = "projects/${data.google_project.current.number}/secrets/${google_secret_manager_secret.datastream_db_password.secret_id}/versions/latest"
+    secret_manager_stored_password = "projects/${data.google_project.current.number}/secrets/${google_secret_manager_secret.secrets["datastream_db_password"].secret_id}/versions/latest"
   }
 
   depends_on = [

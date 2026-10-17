@@ -13,6 +13,31 @@ locals {
     "roles/iam.workloadIdentityPoolViewer",
     "roles/run.viewer",
   ])
+
+  github_actions_service_account_users = {
+    github_actions_open_meteo_user          = "open-meteo-ingestion"
+    github_actions_weather_api_gateway_user = "weather-api-gateway"
+    github_actions_weather_api_user         = "weather-api"
+  }
+
+  github_actions_secret_grants = {
+    github_actions_weather_db_viewer = {
+      secret_key = "weather_db_password"
+      role       = "roles/secretmanager.viewer"
+    }
+    github_actions_datastream_db_viewer = {
+      secret_key = "datastream_db_password"
+      role       = "roles/secretmanager.viewer"
+    }
+    github_actions_aws_s3_secret_viewer = {
+      secret_key = "aws_s3_secret_access_key"
+      role       = "roles/secretmanager.viewer"
+    }
+    github_actions_aws_s3_secret_accessor = {
+      secret_key = "aws_s3_secret_access_key"
+      role       = "roles/secretmanager.secretAccessor"
+    }
+  }
 }
 
 resource "google_service_account_iam_member" "github_actions_wif" {
@@ -49,64 +74,19 @@ resource "google_cloud_run_v2_job_iam_member" "github_actions_developer" {
   member = "serviceAccount:${google_service_account.github_actions.email}"
 }
 
-resource "google_cloud_run_v2_service_iam_member" "github_actions_weather_api_developer" {
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_run_v2_service.weather_api.name
+resource "google_service_account_iam_member" "github_actions_workload_users" {
+  for_each = local.github_actions_service_account_users
 
-  role   = "roles/run.developer"
-  member = "serviceAccount:${google_service_account.github_actions.email}"
+  service_account_id = google_service_account.workloads[each.value].name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.github_actions.email}"
 }
 
-resource "google_service_account_iam_member" "github_actions_open_meteo_user" {
-  service_account_id = google_service_account.workloads["open-meteo-ingestion"].name
+resource "google_secret_manager_secret_iam_member" "github_actions_secrets" {
+  for_each = local.github_actions_secret_grants
 
-  role   = "roles/iam.serviceAccountUser"
-  member = "serviceAccount:${google_service_account.github_actions.email}"
-}
-
-resource "google_service_account_iam_member" "github_actions_weather_api_gateway_user" {
-  service_account_id = google_service_account.workloads["weather-api-gateway"].name
-
-  role   = "roles/iam.serviceAccountUser"
-  member = "serviceAccount:${google_service_account.github_actions.email}"
-}
-
-resource "google_service_account_iam_member" "github_actions_weather_api_user" {
-  service_account_id = google_service_account.workloads["weather-api"].name
-
-  role   = "roles/iam.serviceAccountUser"
-  member = "serviceAccount:${google_service_account.github_actions.email}"
-}
-
-resource "google_secret_manager_secret_iam_member" "github_actions_weather_db_viewer" {
   project   = var.project_id
-  secret_id = google_secret_manager_secret.weather_db_password.secret_id
-
-  role   = "roles/secretmanager.viewer"
-  member = "serviceAccount:${google_service_account.github_actions.email}"
-}
-
-resource "google_secret_manager_secret_iam_member" "github_actions_datastream_db_viewer" {
-  project   = var.project_id
-  secret_id = google_secret_manager_secret.datastream_db_password.secret_id
-
-  role   = "roles/secretmanager.viewer"
-  member = "serviceAccount:${google_service_account.github_actions.email}"
-}
-
-resource "google_secret_manager_secret_iam_member" "github_actions_aws_s3_secret_viewer" {
-  project   = var.project_id
-  secret_id = google_secret_manager_secret.aws_s3_secret_access_key.secret_id
-
-  role   = "roles/secretmanager.viewer"
-  member = "serviceAccount:${google_service_account.github_actions.email}"
-}
-
-resource "google_secret_manager_secret_iam_member" "github_actions_aws_s3_secret_accessor" {
-  project   = var.project_id
-  secret_id = google_secret_manager_secret.aws_s3_secret_access_key.secret_id
-
-  role   = "roles/secretmanager.secretAccessor"
-  member = "serviceAccount:${google_service_account.github_actions.email}"
+  secret_id = google_secret_manager_secret.secrets[each.value.secret_key].secret_id
+  role      = each.value.role
+  member    = "serviceAccount:${google_service_account.github_actions.email}"
 }
