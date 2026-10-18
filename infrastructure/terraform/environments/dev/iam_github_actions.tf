@@ -12,6 +12,7 @@ locals {
     "roles/iam.securityReviewer",
     "roles/iam.serviceAccountViewer",
     "roles/iam.workloadIdentityPoolViewer",
+    "roles/monitoring.viewer",
     "roles/run.viewer",
   ])
 

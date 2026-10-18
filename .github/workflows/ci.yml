@@ -48,6 +48,7 @@ jobs:
       TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
       TF_VAR_github_repository: ${{ github.repository }}
       TF_VAR_aws_s3_access_key_id: ${{ vars.AWS_S3_ACCESS_KEY_ID }}
+      TF_VAR_monitoring_alert_email: ${{ secrets.MONITORING_ALERT_EMAIL }}
 
     steps:
       - name: Checkout repository

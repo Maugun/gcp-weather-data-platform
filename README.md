@@ -759,6 +759,23 @@ To run the automated checks, publish the Dataform subtree, pull it into the Git-
 
 The group-based Dataform workflow completed successfully with the new quality assertions. In the corresponding manual profiles, all missing-key, unmapped-location, invalid-range and negative-measurement counts were zero across 12 PostgreSQL observations, 276 S3 observations, 3 Open-Meteo daily rows and 10 source-location mappings. These counts record the validation run and are not fixed acceptance thresholds.
 
+### Monitoring and Alerting
+
+Cloud Monitoring is managed through Terraform. The project enables the Monitoring API, creates an email notification channel, provisions alert policies and maintains the `Weather Platform Operations` dashboard. The recipient is supplied through the ignored local `terraform.tfvars` file as `monitoring_alert_email`; GitHub Actions receives the same value from the `MONITORING_ALERT_EMAIL` repository secret so Terraform plans can read the channel consistently. Do not put a real address in the committed example file. The variable is marked sensitive to hide it in routine Terraform output, but the notification channel address is still stored in Terraform state, so keep state access restricted.
+
+The current alert policies cover:
+
+- failed workflow invocation logs from the `weather-dataform` Dataform repository;
+- error-level logs emitted by the `open-meteo-ingestion` Cloud Run Job;
+- at least one API Gateway 5xx response during a five-minute metric window;
+- at least one Datastream unsupported event during a five-minute metric window.
+
+The dashboard charts API Gateway request counts by response class, completed Open-Meteo job executions, Datastream freshness and unsupported events. API Gateway's request-count metric is currently BETA. Datastream freshness is shown for investigation, not used as a failure alert: it is zero when there are no new events to read, and the development stream is often paused between exercises. The S3 transfer is manually run, so the project does not alert on a missed schedule. Airflow currently runs locally; production Airflow monitoring belongs to the later Cloud Composer chapter.
+
+Before the first Terraform plan, set `monitoring_alert_email` in the ignored local `terraform.tfvars` and add the same address as the GitHub Actions secret `MONITORING_ALERT_EMAIL`. Apply the reviewed Terraform plan, then inspect **Monitoring → Alerting** and **Monitoring → Dashboards** in the Google Cloud console. If using a Google Group as the recipient, configure it to accept email from `alerting-noreply@google.com`. Review a triggered incident's policy and logs before resolving it; do not treat a quiet development environment as proof that every alert path has been exercised.
+
+The dashboard and alert policies have been deployed and reviewed in Cloud Monitoring. Email delivery was confirmed by receiving an alert during a manual test; the test alert was then disabled. This confirms the notification path, while the Terraform-managed policies above remain the documented operational alert set.
+
 ### BigQuery Row-Level Security
 
 The RLS exercise restricts the five current CURATED tables that contain `location_id` to French locations for a dedicated test identity:
@@ -2048,5 +2065,5 @@ Concurrency
 - [x] BigQuery Row-Level Security
 - [x] BigQuery Column-Level Security / Policy Tags
 - [x] Data quality hardening
-- [ ] Monitoring and alerting
+- [x] Monitoring and alerting
 - [ ] Production-ready Airflow / Cloud Composer deployment

@@ -41,3 +41,14 @@ variable "aws_s3_access_key_id" {
   type        = string
   sensitive   = true
 }
+
+variable "monitoring_alert_email" {
+  description = "Email address or Google Group that receives Cloud Monitoring alerts."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(trimspace(var.monitoring_alert_email)) > 0 && can(regex("^[^@]+@[^@]+\\.[^@]+$", trimspace(var.monitoring_alert_email)))
+    error_message = "monitoring_alert_email must be a valid email address."
+  }
+}
