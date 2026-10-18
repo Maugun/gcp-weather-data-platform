@@ -680,7 +680,28 @@ Dataform workflow execution
 
 A freshness-aware GCS sensor ensures that Airflow waits for an object updated during the current DAG run rather than accepting a stale object already present in the bucket.
 
-A future production deployment can use Google Cloud Composer.
+The repository also contains an optional Cloud Composer lab in the separate Terraform root `infrastructure/terraform/environments/composer-lab/`. This is a small, temporary Composer environment in the same GCP project; it is not created by the normal application deployment workflows.
+
+To create it, copy `terraform.tfvars.example` to `terraform.tfvars`, set `project_id` and `github_repository` (`owner/repository`), then run Terraform from that directory:
+
+```powershell
+Set-Location infrastructure/terraform/environments/composer-lab
+terraform init
+terraform plan
+terraform apply
+```
+
+After Terraform reports that the environment is ready, publish the DAG from GitHub Actions:
+
+1. Open **Actions → Deploy Airflow DAGs → Run workflow** on the `master` branch.
+2. The workflow authenticates with the existing GitHub Workload Identity Federation configuration, discovers the Composer DAG bucket, and uploads the Python files from `orchestration/airflow/dags/`.
+3. Open the Airflow UI and confirm that `weather_ingestion_pipeline` appears before triggering a run.
+
+The workflow is manual because a Terraform apply run locally does not notify GitHub. It also avoids failed uploads when the temporary Composer environment has been destroyed. It reuses the `dev` GitHub Actions variables `GCP_PROJECT_ID`, `GCP_REGION` and `GCP_WIF_PROVIDER`; `GCP_REGION` must match the Composer lab region. Terraform creates a dedicated `composer-dag-deployer` service account, allows only this GitHub repository to impersonate it through the existing Workload Identity Pool, and grants it `composer.environments.get` plus a custom GCS role on the Composer environment bucket. The GCS role can list object names and create/delete objects in that Composer-specific bucket, but cannot read object contents or change the Composer environment. The bucket-level grant is necessary because the generated Composer bucket is not separately managed by this Terraform root.
+
+When the lab is no longer needed, run `terraform destroy` from the same Terraform root. The Terraform configuration and remote state remain available for the next `terraform apply`. Cloud Composer does not automatically delete its generated GCS bucket or retained Cloud Logging entries, so review those separately after destroying the environment.
+
+This Composer lab demonstrates a managed Airflow deployment; it is not yet a claim that the platform is production-ready.
 
 ## Dataform
 

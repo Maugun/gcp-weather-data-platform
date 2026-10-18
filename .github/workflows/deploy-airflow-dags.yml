@@ -1,0 +1,80 @@
+name: Deploy Airflow DAGs
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: airflow-dag-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    environment: dev
+
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      COMPOSER_REGION: ${{ vars.GCP_REGION }}
+      COMPOSER_ENVIRONMENT: weather-airflow
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: composer-dag-deployer@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Resolve Composer DAG bucket
+        shell: bash
+        run: |
+          ENVIRONMENT_STATE=$(gcloud composer environments describe "${COMPOSER_ENVIRONMENT}" \
+            --project="${PROJECT_ID}" \
+            --location="${COMPOSER_REGION}" \
+            --format="value(state)")
+
+          if [[ "${ENVIRONMENT_STATE}" != "RUNNING" ]]; then
+            echo "::error::Cloud Composer environment '${COMPOSER_ENVIRONMENT}' is not RUNNING (state: ${ENVIRONMENT_STATE}). Run terraform apply first."
+            exit 1
+          fi
+
+          DAG_GCS_PREFIX=$(gcloud composer environments describe "${COMPOSER_ENVIRONMENT}" \
+            --project="${PROJECT_ID}" \
+            --location="${COMPOSER_REGION}" \
+            --format="value(config.dagGcsPrefix)")
+
+          if [[ -z "${DAG_GCS_PREFIX}" ]]; then
+            echo "::error::Could not resolve the DAG bucket for '${COMPOSER_ENVIRONMENT}'."
+            exit 1
+          fi
+
+          echo "DAG_GCS_PREFIX=${DAG_GCS_PREFIX%/}" >> "${GITHUB_ENV}"
+          echo "Resolved DAG destination: ${DAG_GCS_PREFIX}"
+
+      - name: Upload Python DAG files
+        shell: bash
+        run: |
+          shopt -s nullglob
+          DAG_FILES=(orchestration/airflow/dags/*.py)
+
+          if (( ${#DAG_FILES[@]} == 0 )); then
+            echo "::error::No Python DAG files found in orchestration/airflow/dags/."
+            exit 1
+          fi
+
+          gcloud storage cp "${DAG_FILES[@]}" "${DAG_GCS_PREFIX}/"
+
+      - name: Confirm uploaded DAG files
+        shell: bash
+        run: gcloud storage ls "${DAG_GCS_PREFIX}/"
