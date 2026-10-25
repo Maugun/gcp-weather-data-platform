@@ -36,6 +36,41 @@ resource "google_cloud_run_v2_job_iam_member" "airflow_open_meteo_executor" {
   member = "serviceAccount:${google_service_account.airflow_orchestrator.email}"
 }
 
+resource "google_project_iam_custom_role" "airflow_cloud_run_job_reader" {
+  project     = var.project_id
+  role_id     = "airflowCloudRunJobReader"
+  title       = "Airflow Cloud Run Job Reader"
+  description = "Read the Open-Meteo Cloud Run Job metadata before Airflow executes it."
+  permissions = [
+    "run.jobs.get",
+  ]
+}
+
+resource "google_cloud_run_v2_job_iam_member" "airflow_cloud_run_job_reader" {
+  project  = var.project_id
+  location = var.region
+  name     = var.cloud_run_job_name
+
+  role   = google_project_iam_custom_role.airflow_cloud_run_job_reader.name
+  member = "serviceAccount:${google_service_account.airflow_orchestrator.email}"
+}
+
+resource "google_project_iam_custom_role" "airflow_cloud_run_operation_reader" {
+  project     = var.project_id
+  role_id     = "airflowCloudRunOperationReader"
+  title       = "Airflow Cloud Run Operation Reader"
+  description = "Read Cloud Run long-running operation status so Airflow can wait for job executions."
+  permissions = [
+    "run.operations.get",
+  ]
+}
+
+resource "google_project_iam_member" "airflow_cloud_run_operation_reader" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.airflow_cloud_run_operation_reader.name
+  member  = "serviceAccount:${google_service_account.airflow_orchestrator.email}"
+}
+
 resource "google_project_iam_custom_role" "dataform_workflow_invoker" {
   project     = var.project_id
   role_id     = "dataformWorkflowInvoker"
