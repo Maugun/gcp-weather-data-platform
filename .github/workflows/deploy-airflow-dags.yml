@@ -73,8 +73,10 @@ jobs:
             exit 1
           fi
 
-          gcloud storage cp "${DAG_FILES[@]}" "${DAG_GCS_PREFIX}/"
+          for DAG_FILE in "${DAG_FILES[@]}"; do
+            DAG_NAME=$(basename "${DAG_FILE}")
+            DESTINATION="${DAG_GCS_PREFIX}/${DAG_NAME}"
 
-      - name: Confirm uploaded DAG files
-        shell: bash
-        run: gcloud storage ls "${DAG_GCS_PREFIX}/"
+            echo "Uploading ${DAG_FILE} to ${DESTINATION}"
+            gcloud storage cp "${DAG_FILE}" "${DESTINATION}"
+          done
