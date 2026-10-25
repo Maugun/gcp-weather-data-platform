@@ -701,6 +701,8 @@ The workflow is manual because a Terraform apply run locally does not notify Git
 
 The `airflow-orchestrator` service account can execute the `open-meteo-ingestion` Cloud Run Job with overrides through `roles/run.jobsExecutorWithOverrides`. The Airflow operator also needs `run.jobs.get` to read the job metadata before execution, so a dedicated custom role containing only that permission is bound directly to the Open-Meteo job. The operator needs `run.operations.get` to poll the long-running execution request; a separate project custom role grants only that permission. `roles/run.viewer` is intentionally not used because it exposes read access to Cloud Run resources across the project.
 
+The Composer lab was validated with a successful manual end-to-end run of `weather_ingestion_pipeline`. The expected Open-Meteo file appeared in GCS, and BigQuery showed one RAW row for Paris on the run date (`raw_rows = 1`, `ingestion_runs = 1`). This validated the Cloud Run Job invocation, GCS freshness check, BigQuery load and downstream Dataform workflow.
+
 When the lab is no longer needed, run `terraform destroy` from the same Terraform root. The Terraform configuration and remote state remain available for the next `terraform apply`. Cloud Composer does not automatically delete its generated GCS bucket or retained Cloud Logging entries, so review those separately after destroying the environment.
 
 This Composer lab demonstrates a managed Airflow deployment; it is not yet a claim that the platform is production-ready.
@@ -2089,4 +2091,4 @@ Concurrency
 - [x] BigQuery Column-Level Security / Policy Tags
 - [x] Data quality hardening
 - [x] Monitoring and alerting
-- [ ] Production-ready Airflow / Cloud Composer deployment
+- [x] Cloud Composer lab deployed with Terraform and end-to-end DAG validation
